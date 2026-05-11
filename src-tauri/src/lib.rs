@@ -7,6 +7,8 @@ pub mod platform;
 pub mod ports;
 pub mod shared;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
