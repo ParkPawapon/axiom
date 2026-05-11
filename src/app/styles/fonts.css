@@ -1,0 +1,5 @@
+:root {
+  --font-display: "Archivo Black", Impact, "Arial Black", sans-serif;
+  --font-ui: "Work Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Space Mono", "Courier New", Consolas, monospace;
+}
