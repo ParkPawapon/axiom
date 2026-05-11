@@ -1,0 +1,1 @@
+// Future macOS path adapter.

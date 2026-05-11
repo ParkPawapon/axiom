@@ -1,0 +1,1 @@
+// Future Windows path adapter.

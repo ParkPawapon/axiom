@@ -1,0 +1,1 @@
+// Future macOS permission adapter.
