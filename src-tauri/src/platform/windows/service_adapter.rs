@@ -1,0 +1,1 @@
+// Future Windows service adapter.
