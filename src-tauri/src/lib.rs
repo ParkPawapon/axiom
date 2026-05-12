@@ -20,6 +20,7 @@ pub fn run() {
 
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::project_commands::get_project_php_version,
+        commands::project_commands::request_project_php_install,
         commands::project_commands::select_project_php_version,
         commands::service_commands::list_services,
         commands::service_commands::get_service_status,

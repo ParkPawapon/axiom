@@ -54,7 +54,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 ## Future Roadmap
 
 - Project-based PHP environment configuration
-- PHP runtime discovery, validation, and runtime switching
+- PHP runtime installation workflows and project process switching
 - MySQL and PostgreSQL service adapters
 - Docker-based service orchestration
 - Reverse proxy and local domain management
@@ -109,4 +109,4 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 
 ## Not Implemented Yet
 
-The app can persist a project PHP version preference and perform safe passive service version probes through narrow command policies. It does not start, stop, restart, install, switch, or manage PHP, MySQL, PostgreSQL, Docker, reverse proxy services, host files, or SSL certificates. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.
+The app can persist a project PHP binary selection when a matching local PHP binary is detected, record manual PHP install requests, and perform safe passive service version probes through narrow command policies. It does not automatically install PHP, start PHP project processes, start, stop, restart, or manage MySQL, PostgreSQL, Docker, reverse proxy services, host files, or SSL certificates. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.
