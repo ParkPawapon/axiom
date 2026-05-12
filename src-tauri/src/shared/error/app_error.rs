@@ -6,6 +6,8 @@ use super::error_code::ErrorCode;
 pub enum AppError {
     #[error("validation failed: {0}")]
     Validation(String),
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("permission denied: {0}")]
     PermissionDenied(String),
     #[error("configuration error: {0}")]
@@ -20,6 +22,7 @@ impl AppError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Validation(_) => ErrorCode::ValidationFailed,
+            Self::NotFound(_) => ErrorCode::NotFound,
             Self::PermissionDenied(_) => ErrorCode::PermissionDenied,
             Self::Configuration(_) => ErrorCode::ConfigurationError,
             Self::Infrastructure(_) => ErrorCode::InfrastructureError,

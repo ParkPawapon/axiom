@@ -1,3 +1,10 @@
+const statusLabels: Record<string, string> = {
+  failed: "FAILED",
+  notConfigured: "NOT CONFIGURED",
+  running: "RUNNING",
+  stopped: "STOPPED",
+};
+
 export function formatServiceStatus(status: string) {
-  return status.toUpperCase();
+  return statusLabels[status] ?? status.toUpperCase();
 }
