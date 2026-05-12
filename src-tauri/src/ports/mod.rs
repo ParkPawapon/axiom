@@ -3,6 +3,7 @@ pub mod docker_client;
 pub mod file_system;
 pub mod log_reader;
 pub mod php_runtime_detector;
+pub mod php_runtime_installer;
 pub mod port_scanner;
 pub mod process_manager;
 pub mod project_repository;

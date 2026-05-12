@@ -27,6 +27,35 @@ pub struct ProjectPhpInstallPlan {
     pub project_id: ProjectId,
     pub php_version: RuntimeVersion,
     pub requires_manual_confirmation: bool,
+    pub provider: Option<PhpRuntimeInstallProvider>,
+    pub package_name: Option<String>,
     pub warning_message: String,
     pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPhpInstallResult {
+    pub project_id: ProjectId,
+    pub php_version: RuntimeVersion,
+    pub provider: PhpRuntimeInstallProvider,
+    pub package_name: String,
+    pub selected_php_binary: Option<DetectedPhpBinary>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PhpRuntimeInstallProvider {
+    Homebrew,
+    Scoop,
+}
+
+impl PhpRuntimeInstallProvider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Homebrew => "Homebrew",
+            Self::Scoop => "Scoop",
+        }
+    }
 }

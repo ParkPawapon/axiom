@@ -1,6 +1,6 @@
 # Security Architecture
 
-AxiomPHP is designed as a secure desktop utility for local PHP development workflows. The current repository is a scaffold only, but the boundaries are intentionally prepared before privileged features are added.
+AxiomPHP is designed as a secure desktop utility for local PHP development workflows. The repository now includes safe passive probes and explicit PHP package-manager installation, while project process supervision and service lifecycle control remain behind future boundaries.
 
 ## Trust Boundaries
 
@@ -13,7 +13,16 @@ AxiomPHP is designed as a secure desktop utility for local PHP development workf
 
 ## Command Execution Policy
 
-Future OS-level execution must use structured command arguments through `CommandRunner`. Shell string concatenation, unsanitized arguments, and direct process execution from Tauri commands are not allowed.
+OS-level execution must use structured command arguments through `CommandRunner`. Shell string concatenation, unsanitized arguments, and direct process execution from Tauri commands are not allowed.
+
+Package-manager installation is constrained by these rules:
+
+- The frontend can request a PHP catalog version only.
+- Backend use cases validate the project ID and PHP version before execution.
+- Infrastructure adapters choose package names and arguments.
+- `CommandRunner` allows only the resolved Homebrew or Scoop executable path.
+- Commands have fixed arguments, timeouts, and output limits.
+- Failed installs do not update the project PHP selection.
 
 ## Validation Policy
 
