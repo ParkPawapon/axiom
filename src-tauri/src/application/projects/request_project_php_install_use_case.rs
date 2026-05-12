@@ -28,10 +28,12 @@ pub fn request_project_php_install(
         project_id,
         php_version: php_version.clone(),
         requires_manual_confirmation: true,
+        provider: None,
+        package_name: None,
         warning_message: format!(
             "PHP {} requires manual installation confirmation. End-of-life PHP branches should only be installed for isolated legacy projects.",
             php_version.as_str()
         ),
-        status_message: "AxiomPHP recorded the install request but did not run an installer. Install or register the PHP binary through a trusted runtime source, then refresh this project before switching.".to_string(),
+        status_message: "AxiomPHP recorded the install request. Use the install command to run the trusted package-manager adapter, or register a PHP binary through a trusted runtime source before switching.".to_string(),
     })
 }

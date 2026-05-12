@@ -35,6 +35,19 @@ export interface ProjectPhpInstallPlan {
   readonly projectId: string;
   readonly phpVersion: string;
   readonly requiresManualConfirmation: boolean;
+  readonly provider?: PhpRuntimeInstallProvider;
+  readonly packageName?: string;
   readonly warningMessage: string;
+  readonly statusMessage: string;
+}
+
+export type PhpRuntimeInstallProvider = "homebrew" | "scoop";
+
+export interface ProjectPhpInstallResult {
+  readonly projectId: string;
+  readonly phpVersion: string;
+  readonly provider: PhpRuntimeInstallProvider;
+  readonly packageName: string;
+  readonly selectedPhpBinary?: DetectedPhpBinary;
   readonly statusMessage: string;
 }

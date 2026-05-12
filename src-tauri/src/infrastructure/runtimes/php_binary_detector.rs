@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::domain::runtime::php_runtime::DetectedPhpBinary;
@@ -29,11 +29,7 @@ impl PhpRuntimeDetector for PhpBinaryDetector {
         let resolver = ExecutableResolver::from_env();
         let mut checked_paths = BTreeSet::new();
 
-        for candidate in php_binary_candidates(version.as_str()) {
-            let Some(path) = resolver.resolve(&candidate) else {
-                continue;
-            };
-
+        for path in php_binary_candidate_paths(version.as_str(), &resolver) {
             if !checked_paths.insert(path.clone()) {
                 continue;
             }
@@ -87,6 +83,78 @@ fn php_binary_candidates(version: &str) -> Vec<String> {
     ]
 }
 
+fn php_binary_candidate_paths(version: &str, resolver: &ExecutableResolver) -> Vec<PathBuf> {
+    let mut paths = php_binary_candidates(version)
+        .into_iter()
+        .filter_map(|candidate| resolver.resolve(&candidate))
+        .collect::<Vec<_>>();
+
+    paths.extend(
+        standard_php_install_paths(version)
+            .into_iter()
+            .filter_map(|path| {
+                if is_executable_file(&path) {
+                    path.canonicalize().ok().or(Some(path))
+                } else {
+                    None
+                }
+            }),
+    );
+
+    paths
+}
+
+#[cfg(target_os = "macos")]
+fn standard_php_install_paths(version: &str) -> Vec<PathBuf> {
+    let formula_names = if version == "8.5" {
+        vec!["php".to_string(), "php@8.5".to_string()]
+    } else {
+        vec![format!("php@{version}")]
+    };
+
+    ["/opt/homebrew", "/usr/local"]
+        .into_iter()
+        .flat_map(|prefix| {
+            formula_names.iter().map(move |formula| {
+                PathBuf::from(prefix)
+                    .join("opt")
+                    .join(formula)
+                    .join("bin/php")
+            })
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn standard_php_install_paths(version: &str) -> Vec<PathBuf> {
+    let Some(user_profile) = std::env::var_os("USERPROFILE") else {
+        return Vec::new();
+    };
+    let compact_version = version.replace('.', "");
+    let mut package_names = vec![format!("php{compact_version}")];
+
+    if version == "8.5" {
+        package_names.push("php".to_string());
+    }
+
+    package_names
+        .into_iter()
+        .map(|package_name| {
+            PathBuf::from(&user_profile)
+                .join("scoop")
+                .join("apps")
+                .join(package_name)
+                .join("current")
+                .join("php.exe")
+        })
+        .collect()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn standard_php_install_paths(_version: &str) -> Vec<PathBuf> {
+    Vec::new()
+}
+
 fn parse_php_version(output: &ProcessOutput) -> Option<RuntimeVersion> {
     output
         .stdout
@@ -119,6 +187,26 @@ fn binary_display_name(path: &Path, output: &ProcessOutput) -> String {
         .unwrap_or("PHP binary");
 
     format!("{binary_name} ({version_line})")
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+
+    metadata.is_file() && has_execute_permission(&metadata)
+}
+
+#[cfg(unix)]
+fn has_execute_permission(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn has_execute_permission(_metadata: &std::fs::Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]

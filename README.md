@@ -2,7 +2,7 @@
 
 AxiomPHP is a production-oriented desktop application foundation for a modern local PHP development control center. The long-term goal is to provide a safer, cleaner replacement for XAMPP-style workflows while keeping services, projects, credentials, and operating-system actions behind explicit boundaries.
 
-Current scope: production foundation plus safe configuration boundaries. Real service lifecycle management, Docker orchestration, PHP runtime control, MySQL, PostgreSQL, host file modification, and certificate generation are intentionally not implemented.
+Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection and explicit package-manager installation are available. Real service lifecycle management, Docker orchestration, MySQL, PostgreSQL, host file modification, and certificate generation are intentionally not implemented.
 
 ## Problem Statement
 
@@ -40,6 +40,8 @@ Future implementation must keep Rust as the security boundary between UI intent 
 - Validate ports, service names, project names, and environment variable keys.
 - Avoid unsafe shell execution and shell string concatenation.
 - Route all process execution through the command runner abstraction.
+- Run package-manager installation only after explicit frontend confirmation.
+- Keep package-manager command arguments backend-owned and version-catalog based.
 - Never expose secrets in frontend logs or serialized command errors.
 - Never store passwords or tokens in plain text.
 - Use platform-specific secure storage such as Keychain on macOS and Credential Manager on Windows.
@@ -54,7 +56,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 ## Future Roadmap
 
 - Project-based PHP environment configuration
-- PHP runtime installation workflows and project process switching
+- Project process switching and runtime supervision
 - MySQL and PostgreSQL service adapters
 - Docker-based service orchestration
 - Reverse proxy and local domain management
@@ -109,4 +111,4 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 
 ## Not Implemented Yet
 
-The app can persist a project PHP binary selection when a matching local PHP binary is detected, record manual PHP install requests, and perform safe passive service version probes through narrow command policies. It does not automatically install PHP, start PHP project processes, start, stop, restart, or manage MySQL, PostgreSQL, Docker, reverse proxy services, host files, or SSL certificates. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.
+The app can persist a project PHP binary selection when a matching local PHP binary is detected, install PHP through Homebrew on macOS or Scoop on Windows after explicit confirmation, and perform safe passive service version probes through narrow command policies. It does not start PHP project processes, start, stop, restart, or manage MySQL, PostgreSQL, Docker, reverse proxy services, host files, or SSL certificates. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.

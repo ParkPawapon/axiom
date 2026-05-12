@@ -1,10 +1,13 @@
 use tauri::State;
 
 use crate::application::projects::get_project_php_version_use_case;
+use crate::application::projects::install_project_php_runtime_use_case;
 use crate::application::projects::request_project_php_install_use_case;
 use crate::application::projects::select_project_php_version_use_case;
 use crate::bootstrap::app_state::AppState;
-use crate::domain::project::project_php_version::{ProjectPhpInstallPlan, ProjectPhpVersionConfig};
+use crate::domain::project::project_php_version::{
+    ProjectPhpInstallPlan, ProjectPhpInstallResult, ProjectPhpVersionConfig,
+};
 use crate::shared::error::command_error_mapper::{map_command_error, CommandErrorPayload};
 
 #[tauri::command]
@@ -54,6 +57,25 @@ pub fn request_project_php_install(
     )
     .map_err(|error| {
         tracing::warn!(?error, "project PHP install request command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn install_project_php_runtime(
+    state: State<'_, AppState>,
+    project_id: String,
+    php_version: String,
+) -> Result<ProjectPhpInstallResult, CommandErrorPayload> {
+    install_project_php_runtime_use_case::install_project_php_runtime(
+        state.project_runtime_repository(),
+        state.php_runtime_detector(),
+        state.php_runtime_installer(),
+        &project_id,
+        &php_version,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project PHP runtime install command failed");
         map_command_error(&error)
     })
 }

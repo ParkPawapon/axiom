@@ -40,6 +40,6 @@ pub fn get_project_php_version(
         selected_php_version,
         selected_php_binary,
         available_php_versions,
-        status_message: "PHP switching is enabled only for PHP binaries detected on this machine. Missing or end-of-life versions require explicit manual installation confirmation before they can be selected.".to_string(),
+        status_message: "PHP switching is enabled only for PHP binaries detected on this machine. Missing versions require explicit confirmation before the backend runs the Homebrew or Scoop installer adapter.".to_string(),
     })
 }

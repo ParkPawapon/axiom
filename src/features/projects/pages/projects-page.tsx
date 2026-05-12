@@ -7,11 +7,11 @@ import { PageShell } from "../../../shared/components/layout/page-shell";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import {
   getProjectPhpVersion,
-  requestProjectPhpInstall,
+  installProjectPhpRuntime,
   selectProjectPhpVersion,
 } from "../api/project.commands";
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
-import type { ProjectPhpVersionConfig } from "../types/project.types";
+import type { PhpRuntimeInstallProvider, ProjectPhpVersionConfig } from "../types/project.types";
 
 const currentProjectId = "current-project";
 
@@ -26,6 +26,11 @@ function getErrorMessage(error: unknown) {
 
   return "Project runtime command failed safely. Check the application logs for details.";
 }
+
+const providerLabels: Record<PhpRuntimeInstallProvider, string> = {
+  homebrew: "Homebrew",
+  scoop: "Scoop",
+};
 
 export function ProjectsPage() {
   const [config, setConfig] = useState<ProjectPhpVersionConfig>();
@@ -65,7 +70,13 @@ export function ProjectsPage() {
     }
 
     const shouldInstall = window.confirm(
-      `${selectedOption.label} is not installed for this project.\n\n${selectedOption.lifecycleWarning ?? "Install only from a trusted PHP runtime source."}\n\nAxiomPHP will record this install request, but it will not run a system installer automatically. Continue?`,
+      [
+        `${selectedOption.label} is not installed for this project.`,
+        selectedOption.lifecycleWarning ?? "Install only from a trusted PHP runtime source.",
+        "AxiomPHP will run a package-manager install through the Rust backend using Homebrew on macOS or Scoop on Windows.",
+        "No shell command is built by the frontend. Only the resolved package-manager executable is allowed by the backend command policy.",
+        "Continue?",
+      ].join("\n\n"),
     );
 
     if (!shouldInstall) {
@@ -77,8 +88,10 @@ export function ProjectsPage() {
     setNoticeMessage(undefined);
 
     try {
-      const installPlan = await requestProjectPhpInstall(currentProjectId, draftVersion);
-      setNoticeMessage(`${installPlan.warningMessage} ${installPlan.statusMessage}`);
+      const installResult = await installProjectPhpRuntime(currentProjectId, draftVersion);
+      setNoticeMessage(
+        `${installResult.statusMessage} Provider: ${providerLabels[installResult.provider]}. Package: ${installResult.packageName}.`,
+      );
       await loadConfig();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -111,7 +124,7 @@ export function ProjectsPage() {
   return (
     <PageShell
       title="Projects"
-      description="Project runtime preferences are stored by the Rust backend. Runtime switching and process execution remain disabled."
+      description="Project runtime preferences and PHP binary installation are controlled by the Rust backend. Project process execution remains disabled."
     >
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
       {noticeMessage ? <WarningPanel message={noticeMessage} /> : null}
