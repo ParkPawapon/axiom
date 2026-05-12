@@ -14,11 +14,13 @@ pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
 
     let builder = tauri::Builder::default().setup(|app| {
-        app.manage(bootstrap::app_state::AppState::new());
+        app.manage(bootstrap::app_state::AppState::new()?);
         Ok(())
     });
 
     let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::project_commands::get_project_php_version,
+        commands::project_commands::select_project_php_version,
         commands::service_commands::list_services,
         commands::service_commands::get_service_status,
         commands::service_commands::start_service,
