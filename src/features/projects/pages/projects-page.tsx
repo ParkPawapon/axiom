@@ -1,16 +1,99 @@
+import { useCallback, useEffect, useState } from "react";
+
+import { ErrorPanel } from "../../../shared/components/feedback/error-panel";
+import { LoadingState } from "../../../shared/components/feedback/loading-state";
+import { WarningPanel } from "../../../shared/components/feedback/warning-panel";
 import { PageShell } from "../../../shared/components/layout/page-shell";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
+import { getProjectPhpVersion, selectProjectPhpVersion } from "../api/project.commands";
+import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
+import type { ProjectPhpVersionConfig } from "../types/project.types";
+
+const currentProjectId = "current-project";
+
+function getErrorMessage(error: unknown) {
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+
+    if (typeof message === "string" && message.trim().length > 0) {
+      return message;
+    }
+  }
+
+  return "Project runtime command failed safely. Check the application logs for details.";
+}
 
 export function ProjectsPage() {
+  const [config, setConfig] = useState<ProjectPhpVersionConfig>();
+  const [draftVersion, setDraftVersion] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>();
+  const [noticeMessage, setNoticeMessage] = useState<string>();
+
+  const loadConfig = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage(undefined);
+
+    try {
+      const nextConfig = await getProjectPhpVersion(currentProjectId);
+      setConfig(nextConfig);
+      setDraftVersion(nextConfig.selectedPhpVersion);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
+
+  const handleSave = useCallback(async () => {
+    if (!draftVersion) {
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage(undefined);
+    setNoticeMessage(undefined);
+
+    try {
+      const nextConfig = await selectProjectPhpVersion(currentProjectId, draftVersion);
+      setConfig(nextConfig);
+      setDraftVersion(nextConfig.selectedPhpVersion);
+      setNoticeMessage(`PHP ${nextConfig.selectedPhpVersion} selected for this project.`);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [draftVersion]);
+
   return (
     <PageShell
       title="Projects"
-      description="Future project-based PHP environment configuration will live here."
+      description="Project runtime preferences are stored by the Rust backend. Runtime switching and process execution remain disabled."
     >
-      <EmptyState
-        title="No project management yet"
-        description="Project creation, document root selection, local domains, and environment profiles are intentionally not implemented in this scaffold."
-      />
+      {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
+      {noticeMessage ? <WarningPanel message={noticeMessage} /> : null}
+      {isLoading ? <LoadingState label="Loading project runtime preference" /> : null}
+      {!isLoading && config ? (
+        <ProjectPhpVersionSelector
+          config={config}
+          draftVersion={draftVersion}
+          isSaving={isSaving}
+          onDraftVersionChange={setDraftVersion}
+          onSave={handleSave}
+        />
+      ) : null}
+      {!isLoading && !config ? (
+        <EmptyState
+          title="No project runtime profile"
+          description="The backend did not return a project runtime configuration."
+        />
+      ) : null}
     </PageShell>
   );
 }

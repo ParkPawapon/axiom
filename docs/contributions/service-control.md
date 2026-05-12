@@ -24,13 +24,15 @@ Prepare a production-safe contribution track for PHP runtime, database, reverse 
 
 - Service inventory is served by Rust through thin Tauri commands.
 - Service IDs are validated before use cases call the service manager port.
+- Service-specific status adapters perform passive version probes for PHP, MySQL, PostgreSQL, Docker, and reverse proxy candidates.
+- Each passive probe resolves a supported executable from `PATH`, builds an absolute-path `CommandPolicy` allowlist for that single binary, and runs only the adapter-owned version command through `CommandRunner`.
 - Lifecycle requests return blocked outcomes while runtime drivers are not configured.
-- No OS-level process, service, Docker, PHP, MySQL, PostgreSQL, hosts file, or certificate action is executed.
+- No service start, stop, restart, Docker orchestration, hosts file, or certificate action is executed.
 - The Services screen calls the backend for inventory and status checks instead of rendering static placeholders.
 
 ## Out Of Scope
 
 - Real start, stop, or restart logic.
-- Direct PHP, MySQL, PostgreSQL, Docker, or reverse proxy execution.
+- Direct lifecycle execution for PHP, MySQL, PostgreSQL, Docker, or reverse proxy services.
 - Host file changes.
 - Certificate generation.

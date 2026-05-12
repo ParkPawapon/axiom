@@ -15,6 +15,7 @@ interface ServiceStatusRowProps {
 }
 
 const statusTone: Record<ManagedService["status"], StatusTone> = {
+  detected: "neutral",
   failed: "error",
   notConfigured: "warning",
   running: "success",
@@ -38,7 +39,10 @@ export function ServiceStatusRow({
           <h3 className="font-display text-xl uppercase leading-none text-voicebox-black">
             {service.name}
           </h3>
-          <StatusBadge label={formatServiceStatus(service.status)} tone={statusTone[service.status]} />
+          <StatusBadge
+            label={formatServiceStatus(service.status)}
+            tone={statusTone[service.status]}
+          />
         </div>
         <p className="mt-2 max-w-2xl text-sm text-voicebox-secondary">{service.description}</p>
         <p className="mt-3 border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">

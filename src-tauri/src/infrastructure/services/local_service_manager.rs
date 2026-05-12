@@ -2,8 +2,15 @@ use crate::domain::service::service::Service;
 use crate::domain::service::service_action::{
     ServiceAction, ServiceActionOutcome, ServiceActionState,
 };
-use crate::domain::service::service_status::ServiceStatus;
 use crate::domain::service::service_type::ServiceType;
+use crate::infrastructure::services::adapters::docker_service_adapter::DockerServiceAdapter;
+use crate::infrastructure::services::adapters::mysql_service_adapter::MysqlServiceAdapter;
+use crate::infrastructure::services::adapters::php_runtime_adapter::PhpRuntimeAdapter;
+use crate::infrastructure::services::adapters::postgresql_service_adapter::PostgresqlServiceAdapter;
+use crate::infrastructure::services::adapters::reverse_proxy_adapter::ReverseProxyAdapter;
+use crate::infrastructure::services::adapters::service_status_adapter::{
+    ServiceProbeResult, ServiceStatusAdapter,
+};
 use crate::ports::service_manager::ServiceManager;
 use crate::shared::error::app_error::AppError;
 use crate::shared::result::app_result::AppResult;
@@ -15,6 +22,16 @@ struct ServiceDefinition {
     service_type: ServiceType,
     description: &'static str,
     required_driver: &'static str,
+    probe_kind: ServiceProbeKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ServiceProbeKind {
+    Docker,
+    Mysql,
+    Php,
+    Postgresql,
+    ReverseProxy,
 }
 
 #[derive(Debug, Default)]
@@ -27,6 +44,7 @@ const SERVICE_CATALOG: &[ServiceDefinition] = &[
         service_type: ServiceType::Php,
         description: "Per-project PHP process control for local development.",
         required_driver: "PHP runtime driver",
+        probe_kind: ServiceProbeKind::Php,
     },
     ServiceDefinition {
         id: "mysql",
@@ -34,6 +52,7 @@ const SERVICE_CATALOG: &[ServiceDefinition] = &[
         service_type: ServiceType::Mysql,
         description: "Local MySQL service lifecycle boundary.",
         required_driver: "MySQL service driver",
+        probe_kind: ServiceProbeKind::Mysql,
     },
     ServiceDefinition {
         id: "postgresql",
@@ -41,6 +60,7 @@ const SERVICE_CATALOG: &[ServiceDefinition] = &[
         service_type: ServiceType::Postgresql,
         description: "Local PostgreSQL service lifecycle boundary.",
         required_driver: "PostgreSQL service driver",
+        probe_kind: ServiceProbeKind::Postgresql,
     },
     ServiceDefinition {
         id: "reverse-proxy",
@@ -48,6 +68,7 @@ const SERVICE_CATALOG: &[ServiceDefinition] = &[
         service_type: ServiceType::ReverseProxy,
         description: "Local domain routing and HTTPS entrypoint boundary.",
         required_driver: "reverse proxy driver",
+        probe_kind: ServiceProbeKind::ReverseProxy,
     },
     ServiceDefinition {
         id: "docker",
@@ -55,6 +76,7 @@ const SERVICE_CATALOG: &[ServiceDefinition] = &[
         service_type: ServiceType::Docker,
         description: "Docker-backed service orchestration boundary.",
         required_driver: "Docker client driver",
+        probe_kind: ServiceProbeKind::Docker,
     },
 ];
 
@@ -71,19 +93,28 @@ impl LocalServiceManager {
     }
 
     fn service_from_definition(definition: &ServiceDefinition) -> Service {
+        let probe = Self::probe_definition(definition);
+
         Service {
             id: definition.id.to_string(),
             name: definition.name.to_string(),
             service_type: definition.service_type,
-            status: ServiceStatus::NotConfigured,
+            status: probe.status,
             description: definition.description.to_string(),
-            status_message: format!(
-                "{} is not configured yet. Configure a production service adapter before enabling lifecycle actions.",
-                definition.required_driver
-            ),
-            can_start: false,
-            can_stop: false,
-            can_restart: false,
+            status_message: probe.status_message,
+            can_start: probe.can_start,
+            can_stop: probe.can_stop,
+            can_restart: probe.can_restart,
+        }
+    }
+
+    fn probe_definition(definition: &ServiceDefinition) -> ServiceProbeResult {
+        match definition.probe_kind {
+            ServiceProbeKind::Docker => DockerServiceAdapter::new().probe(),
+            ServiceProbeKind::Mysql => MysqlServiceAdapter::new().probe(),
+            ServiceProbeKind::Php => PhpRuntimeAdapter::new().probe(),
+            ServiceProbeKind::Postgresql => PostgresqlServiceAdapter::new().probe(),
+            ServiceProbeKind::ReverseProxy => ReverseProxyAdapter::new().probe(),
         }
     }
 
@@ -100,7 +131,7 @@ impl LocalServiceManager {
             state: ServiceActionState::Blocked,
             service,
             message: format!(
-                "{} is not configured. The request was validated, but no OS-level action was executed.",
+                "{} lifecycle execution is not enabled. The request was validated, but no OS-level start, stop, or restart action was executed.",
                 definition.required_driver
             ),
         })
@@ -147,9 +178,8 @@ mod tests {
 
         assert_eq!(services.len(), 5);
         assert!(services.iter().all(|service| !service.can_start));
-        assert!(services
-            .iter()
-            .all(|service| service.status == ServiceStatus::NotConfigured));
+        assert!(services.iter().all(|service| !service.can_stop));
+        assert!(services.iter().all(|service| !service.can_restart));
     }
 
     #[test]
@@ -161,7 +191,10 @@ mod tests {
             .expect("known service should return an outcome");
 
         assert_eq!(outcome.state, ServiceActionState::Blocked);
-        assert_eq!(outcome.service.status, ServiceStatus::NotConfigured);
+        assert!(!outcome.service.can_start);
+        assert!(outcome
+            .message
+            .contains("no OS-level start, stop, or restart action"));
     }
 
     #[test]

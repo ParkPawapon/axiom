@@ -2,7 +2,7 @@
 
 AxiomPHP is a production-oriented desktop application foundation for a modern local PHP development control center. The long-term goal is to provide a safer, cleaner replacement for XAMPP-style workflows while keeping services, projects, credentials, and operating-system actions behind explicit boundaries.
 
-Current scope: architecture scaffold only. Service management, Docker orchestration, PHP runtime control, MySQL, PostgreSQL, host file modification, certificate generation, and process execution are intentionally not implemented.
+Current scope: production foundation plus safe configuration boundaries. Real service lifecycle management, Docker orchestration, PHP runtime control, MySQL, PostgreSQL, host file modification, and certificate generation are intentionally not implemented.
 
 ## Problem Statement
 
@@ -27,7 +27,7 @@ The project follows Clean Architecture on the Rust side and feature-based archit
 - `src-tauri/src/domain` contains pure domain models.
 - `src-tauri/src/application` contains use-case boundaries.
 - `src-tauri/src/ports` contains traits for external systems.
-- `src-tauri/src/infrastructure` contains adapter placeholders.
+- `src-tauri/src/infrastructure` contains adapters for local persistence, safe passive service probes, and future external systems.
 - `src-tauri/src/platform` contains macOS and Windows adapter placeholders.
 - `src-tauri/src/commands` is reserved for thin Tauri command handlers that call application use cases.
 - `src-tauri/src/shared` contains error, result, validation, and serialization foundations.
@@ -39,7 +39,7 @@ Future implementation must keep Rust as the security boundary between UI intent 
 - Validate all user-provided paths before filesystem access.
 - Validate ports, service names, project names, and environment variable keys.
 - Avoid unsafe shell execution and shell string concatenation.
-- Route all future process execution through a command runner abstraction.
+- Route all process execution through the command runner abstraction.
 - Never expose secrets in frontend logs or serialized command errors.
 - Never store passwords or tokens in plain text.
 - Use platform-specific secure storage such as Keychain on macOS and Credential Manager on Windows.
@@ -54,7 +54,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 ## Future Roadmap
 
 - Project-based PHP environment configuration
-- PHP runtime discovery and validation
+- PHP runtime discovery, validation, and runtime switching
 - MySQL and PostgreSQL service adapters
 - Docker-based service orchestration
 - Reverse proxy and local domain management
@@ -109,4 +109,4 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 
 ## Not Implemented Yet
 
-This scaffold does not start, stop, restart, detect, or manage any service. It does not execute OS commands, control Docker, connect to databases, write host files, generate SSL certificates, or manage PHP runtimes. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.
+The app can persist a project PHP version preference and perform safe passive service version probes through narrow command policies. It does not start, stop, restart, install, switch, or manage PHP, MySQL, PostgreSQL, Docker, reverse proxy services, host files, or SSL certificates. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.
