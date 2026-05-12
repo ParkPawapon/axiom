@@ -1,6 +1,6 @@
 export type ServiceType = "php" | "mysql" | "postgresql" | "reverseProxy" | "docker";
 
-export type ServiceStatus = "notConfigured" | "stopped" | "running" | "failed";
+export type ServiceStatus = "detected" | "notConfigured" | "stopped" | "running" | "failed";
 
 export type ServiceAction = "start" | "stop" | "restart";
 
