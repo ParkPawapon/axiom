@@ -3,18 +3,38 @@ export interface ProjectPlaceholder {
   readonly name: string;
 }
 
-export type PhpVersionSupportPhase = "active" | "security";
+export type PhpVersionSupportPhase = "active" | "security" | "endOfLife";
+
+export interface DetectedPhpBinary {
+  readonly version: string;
+  readonly path: string;
+  readonly displayName: string;
+}
 
 export interface PhpVersionOption {
   readonly version: string;
   readonly label: string;
   readonly supportPhase: PhpVersionSupportPhase;
   readonly recommended: boolean;
+  readonly installed: boolean;
+  readonly binaryDisplayName?: string;
+  readonly canSwitch: boolean;
+  readonly requiresManualInstallConfirmation: boolean;
+  readonly lifecycleWarning?: string;
 }
 
 export interface ProjectPhpVersionConfig {
   readonly projectId: string;
   readonly selectedPhpVersion: string;
+  readonly selectedPhpBinary?: DetectedPhpBinary;
   readonly availablePhpVersions: PhpVersionOption[];
+  readonly statusMessage: string;
+}
+
+export interface ProjectPhpInstallPlan {
+  readonly projectId: string;
+  readonly phpVersion: string;
+  readonly requiresManualConfirmation: boolean;
+  readonly warningMessage: string;
   readonly statusMessage: string;
 }

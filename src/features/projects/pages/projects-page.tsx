@@ -5,7 +5,11 @@ import { LoadingState } from "../../../shared/components/feedback/loading-state"
 import { WarningPanel } from "../../../shared/components/feedback/warning-panel";
 import { PageShell } from "../../../shared/components/layout/page-shell";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
-import { getProjectPhpVersion, selectProjectPhpVersion } from "../api/project.commands";
+import {
+  getProjectPhpVersion,
+  requestProjectPhpInstall,
+  selectProjectPhpVersion,
+} from "../api/project.commands";
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
 import type { ProjectPhpVersionConfig } from "../types/project.types";
 
@@ -27,6 +31,7 @@ export function ProjectsPage() {
   const [config, setConfig] = useState<ProjectPhpVersionConfig>();
   const [draftVersion, setDraftVersion] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isInstalling, setIsInstalling] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
   const [noticeMessage, setNoticeMessage] = useState<string>();
@@ -50,6 +55,38 @@ export function ProjectsPage() {
     void loadConfig();
   }, [loadConfig]);
 
+  const selectedOption = config?.availablePhpVersions.find(
+    (version) => version.version === draftVersion,
+  );
+
+  const handleInstall = useCallback(async () => {
+    if (!draftVersion || !selectedOption) {
+      return;
+    }
+
+    const shouldInstall = window.confirm(
+      `${selectedOption.label} is not installed for this project.\n\n${selectedOption.lifecycleWarning ?? "Install only from a trusted PHP runtime source."}\n\nAxiomPHP will record this install request, but it will not run a system installer automatically. Continue?`,
+    );
+
+    if (!shouldInstall) {
+      return;
+    }
+
+    setIsInstalling(true);
+    setErrorMessage(undefined);
+    setNoticeMessage(undefined);
+
+    try {
+      const installPlan = await requestProjectPhpInstall(currentProjectId, draftVersion);
+      setNoticeMessage(`${installPlan.warningMessage} ${installPlan.statusMessage}`);
+      await loadConfig();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsInstalling(false);
+    }
+  }, [draftVersion, loadConfig, selectedOption]);
+
   const handleSave = useCallback(async () => {
     if (!draftVersion) {
       return;
@@ -63,7 +100,7 @@ export function ProjectsPage() {
       const nextConfig = await selectProjectPhpVersion(currentProjectId, draftVersion);
       setConfig(nextConfig);
       setDraftVersion(nextConfig.selectedPhpVersion);
-      setNoticeMessage(`PHP ${nextConfig.selectedPhpVersion} selected for this project.`);
+      setNoticeMessage(`PHP ${nextConfig.selectedPhpVersion} binary selected for this project.`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -83,8 +120,10 @@ export function ProjectsPage() {
         <ProjectPhpVersionSelector
           config={config}
           draftVersion={draftVersion}
+          isInstalling={isInstalling}
           isSaving={isSaving}
           onDraftVersionChange={setDraftVersion}
+          onInstall={handleInstall}
           onSave={handleSave}
         />
       ) : null}

@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 
 use crate::domain::project::project_id::ProjectId;
+use crate::domain::project::project_php_version::ProjectPhpRuntimeSelection;
+use crate::domain::runtime::runtime_path::RuntimePath;
 use crate::domain::runtime::runtime_version::RuntimeVersion;
 use crate::ports::project_runtime_repository::ProjectRuntimeRepository;
 use crate::shared::error::app_error::AppError;
@@ -28,7 +30,18 @@ struct ProjectRuntimeStore {
 #[serde(rename_all = "camelCase")]
 struct StoredProjectRuntimePreference {
     php_version: RuntimeVersion,
+    #[serde(default)]
+    php_binary_path: Option<RuntimePath>,
+    #[serde(default)]
+    install_requests: Vec<StoredProjectRuntimeInstallRequest>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredProjectRuntimeInstallRequest {
+    php_version: RuntimeVersion,
+    requested_at: DateTime<Utc>,
 }
 
 impl FileProjectRuntimeRepository {
@@ -109,23 +122,71 @@ impl FileProjectRuntimeRepository {
 }
 
 impl ProjectRuntimeRepository for FileProjectRuntimeRepository {
-    fn get_php_version(&self, project_id: &ProjectId) -> AppResult<Option<RuntimeVersion>> {
+    fn get_php_selection(
+        &self,
+        project_id: &ProjectId,
+    ) -> AppResult<Option<ProjectPhpRuntimeSelection>> {
         Ok(self
             .load_store()?
             .projects
             .get(&project_id.0)
-            .map(|preference| preference.php_version.clone()))
+            .and_then(|preference| {
+                Some(ProjectPhpRuntimeSelection {
+                    php_version: preference.php_version.clone(),
+                    php_binary_path: preference.php_binary_path.clone()?,
+                })
+            }))
     }
 
-    fn save_php_version(&self, project_id: &ProjectId, version: &RuntimeVersion) -> AppResult<()> {
+    fn save_php_selection(
+        &self,
+        project_id: &ProjectId,
+        selection: &ProjectPhpRuntimeSelection,
+    ) -> AppResult<()> {
         let mut store = self.load_store()?;
+        let install_requests = store
+            .projects
+            .get(&project_id.0)
+            .map(|preference| preference.install_requests.clone())
+            .unwrap_or_default();
+
         store.projects.insert(
             project_id.0.clone(),
             StoredProjectRuntimePreference {
-                php_version: version.clone(),
+                php_version: selection.php_version.clone(),
+                php_binary_path: Some(selection.php_binary_path.clone()),
+                install_requests,
                 updated_at: Utc::now(),
             },
         );
+
+        self.save_store(&store)
+    }
+
+    fn record_php_install_request(
+        &self,
+        project_id: &ProjectId,
+        version: &RuntimeVersion,
+    ) -> AppResult<()> {
+        let mut store = self.load_store()?;
+        let preference = store
+            .projects
+            .entry(project_id.0.clone())
+            .or_insert_with(|| StoredProjectRuntimePreference {
+                php_version: version.clone(),
+                php_binary_path: None,
+                install_requests: Vec::new(),
+                updated_at: Utc::now(),
+            });
+
+        preference.php_version = version.clone();
+        preference
+            .install_requests
+            .push(StoredProjectRuntimeInstallRequest {
+                php_version: version.clone(),
+                requested_at: Utc::now(),
+            });
+        preference.updated_at = Utc::now();
 
         self.save_store(&store)
     }
@@ -144,16 +205,20 @@ mod tests {
         let repository = FileProjectRuntimeRepository::with_storage_path(storage_path.clone());
         let project_id = ProjectId("current-project".to_string());
         let version = RuntimeVersion::trusted("8.4");
+        let selection = ProjectPhpRuntimeSelection {
+            php_version: version.clone(),
+            php_binary_path: RuntimePath("/usr/local/bin/php8.4".to_string()),
+        };
 
         repository
-            .save_php_version(&project_id, &version)
+            .save_php_selection(&project_id, &selection)
             .expect("preference should save");
 
         let persisted = repository
-            .get_php_version(&project_id)
+            .get_php_selection(&project_id)
             .expect("preference should load");
 
-        assert_eq!(persisted, Some(version));
+        assert_eq!(persisted, Some(selection));
 
         let _ = fs::remove_file(storage_path);
     }

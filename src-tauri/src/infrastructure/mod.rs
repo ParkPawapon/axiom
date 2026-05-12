@@ -5,5 +5,6 @@ pub mod logging;
 pub mod networking;
 pub mod persistence;
 pub mod process;
+pub mod runtimes;
 pub mod secure_storage;
 pub mod services;
