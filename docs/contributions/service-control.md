@@ -20,6 +20,14 @@ Prepare a production-safe contribution track for PHP runtime, database, reverse 
 - Never expose secrets or raw command output to frontend logs.
 - Add tests before enabling start, stop, or restart commands.
 
+## Current Implementation
+
+- Service inventory is served by Rust through thin Tauri commands.
+- Service IDs are validated before use cases call the service manager port.
+- Lifecycle requests return blocked outcomes while runtime drivers are not configured.
+- No OS-level process, service, Docker, PHP, MySQL, PostgreSQL, hosts file, or certificate action is executed.
+- The Services screen calls the backend for inventory and status checks instead of rendering static placeholders.
+
 ## Out Of Scope
 
 - Real start, stop, or restart logic.

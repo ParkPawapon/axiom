@@ -6,3 +6,4 @@ pub mod networking;
 pub mod persistence;
 pub mod process;
 pub mod secure_storage;
+pub mod services;

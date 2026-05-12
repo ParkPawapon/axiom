@@ -18,6 +18,14 @@ pub fn run() {
         Ok(())
     });
 
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::service_commands::list_services,
+        commands::service_commands::get_service_status,
+        commands::service_commands::start_service,
+        commands::service_commands::stop_service,
+        commands::service_commands::restart_service,
+    ]);
+
     if let Err(error) = builder.run(tauri::generate_context!()) {
         tracing::error!(?error, "failed to run AxiomPHP");
     }
