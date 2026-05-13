@@ -10,12 +10,7 @@ interface ProjectPathPickerProps {
   onChange: (value: string) => void;
 }
 
-export function ProjectPathPicker({
-  disabled,
-  label,
-  onChange,
-  value,
-}: ProjectPathPickerProps) {
+export function ProjectPathPicker({ disabled, label, onChange, value }: ProjectPathPickerProps) {
   async function handleBrowse() {
     const selectedPath = await open({
       directory: true,

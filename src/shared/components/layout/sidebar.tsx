@@ -13,15 +13,18 @@ interface SidebarProps {
 
 export function Sidebar({ activeRouteId, routes, onNavigate }: SidebarProps) {
   return (
-    <aside className="border-r border-voicebox-border bg-white">
-      <nav aria-label={navigationConfig.primaryLabel} className="flex flex-col gap-1 p-3">
+    <aside className="border-b border-voicebox-border bg-white lg:border-b-0 lg:border-r">
+      <nav
+        aria-label={navigationConfig.primaryLabel}
+        className="flex gap-1 overflow-x-auto p-3 lg:flex-col lg:overflow-x-visible"
+      >
         {routes.map((route) => {
           const isActive = route.id === activeRouteId;
 
           return (
             <button
               aria-current={isActive ? "page" : undefined}
-              className={`border px-3 py-3 text-left text-sm font-bold transition-colors ${
+              className={`min-w-max border px-3 py-3 text-left text-sm font-bold transition-colors lg:min-w-0 ${
                 isActive
                   ? "border-voicebox-black bg-voicebox-black text-white"
                   : "border-transparent bg-white text-voicebox-secondary hover:border-voicebox-border hover:text-voicebox-black"
