@@ -33,8 +33,9 @@ export function ServiceControlPanel({
         <div>
           <h2 className="font-display text-2xl uppercase leading-none">Service Control</h2>
           <p className="mt-2 max-w-3xl text-sm text-voicebox-secondary">
-            Backend-backed service inventory and lifecycle boundary. Runtime drivers must be
-            configured before OS-level actions can run.
+            Backend-backed lifecycle control for MySQL, PostgreSQL, reverse proxy, and Docker.
+            Actions stay disabled until a supported launchd label, Windows service, or Docker
+            boundary is detected.
           </p>
         </div>
         <Button disabled={isLoading} onClick={onRefresh} variant="secondary">

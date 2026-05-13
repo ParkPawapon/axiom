@@ -109,7 +109,7 @@ export function ServicesPage() {
   return (
     <PageShell
       title="Services"
-      description="Production service control starts at the Rust backend boundary. OS-level service drivers remain disabled until explicit runtime adapters are configured."
+      description="Service lifecycle requests are executed only through Rust backend adapters with allowlisted OS commands and platform-specific drivers."
     >
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
       {noticeMessage ? <WarningPanel message={noticeMessage} /> : null}
