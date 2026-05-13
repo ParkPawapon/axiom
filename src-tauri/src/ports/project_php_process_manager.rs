@@ -1,4 +1,5 @@
 use crate::domain::project::project_id::ProjectId;
+use crate::domain::project::project_path::ProjectPath;
 use crate::domain::project::project_process::ProjectPhpProcessStatus;
 use crate::domain::runtime::php_runtime::DetectedPhpBinary;
 use crate::domain::runtime::runtime_version::RuntimeVersion;
@@ -7,6 +8,7 @@ use crate::shared::result::app_result::AppResult;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StartProjectPhpProcessRequest {
     pub project_id: ProjectId,
+    pub document_root: ProjectPath,
     pub php_version: RuntimeVersion,
     pub php_binary: DetectedPhpBinary,
 }

@@ -271,7 +271,7 @@ export function ProjectsPage() {
     const shouldStart = window.confirm(
       [
         "Start the selected PHP binary as a local project process?",
-        "AxiomPHP will bind the PHP built-in server to 127.0.0.1 only. Document-root execution is not enabled in this branch.",
+        "AxiomPHP will bind the PHP built-in server to 127.0.0.1 only and serve the selected project's document root.",
         "No shell command is built by the frontend. Continue?",
       ].join("\n\n"),
     );

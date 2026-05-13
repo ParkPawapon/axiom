@@ -185,6 +185,7 @@ pub fn start_project_php_process(
     project_id: String,
 ) -> Result<ProjectPhpProcessStatus, CommandErrorPayload> {
     start_project_php_process_use_case::start_project_php_process(
+        state.project_repository(),
         state.project_runtime_repository(),
         state.php_runtime_detector(),
         state.project_php_process_manager(),
