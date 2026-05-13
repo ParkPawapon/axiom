@@ -1,6 +1,14 @@
-export interface ProjectPlaceholder {
+export interface Project {
   readonly id: string;
   readonly name: string;
+  readonly documentRoot: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ProjectDraft {
+  readonly name: string;
+  readonly documentRoot: string;
 }
 
 export type PhpVersionSupportPhase = "active" | "security" | "endOfLife";

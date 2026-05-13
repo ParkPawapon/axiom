@@ -18,23 +18,29 @@ pub fn run() {
         }
     };
 
-    let builder =
-        tauri::Builder::default()
-            .manage(app_state)
-            .invoke_handler(tauri::generate_handler![
-                commands::project_commands::get_project_php_version,
-                commands::project_commands::select_project_php_version,
-                commands::project_commands::request_project_php_install,
-                commands::project_commands::install_project_php_runtime,
-                commands::project_commands::get_project_php_process_status,
-                commands::project_commands::start_project_php_process,
-                commands::project_commands::stop_project_php_process,
-                commands::service_commands::list_services,
-                commands::service_commands::get_service_status,
-                commands::service_commands::start_service,
-                commands::service_commands::stop_service,
-                commands::service_commands::restart_service,
-            ]);
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(app_state)
+        .invoke_handler(tauri::generate_handler![
+            commands::project_commands::list_projects,
+            commands::project_commands::get_project,
+            commands::project_commands::create_project,
+            commands::project_commands::update_project,
+            commands::project_commands::delete_project,
+            commands::project_commands::validate_project_path,
+            commands::project_commands::get_project_php_version,
+            commands::project_commands::select_project_php_version,
+            commands::project_commands::request_project_php_install,
+            commands::project_commands::install_project_php_runtime,
+            commands::project_commands::get_project_php_process_status,
+            commands::project_commands::start_project_php_process,
+            commands::project_commands::stop_project_php_process,
+            commands::service_commands::list_services,
+            commands::service_commands::get_service_status,
+            commands::service_commands::start_service,
+            commands::service_commands::stop_service,
+            commands::service_commands::restart_service,
+        ]);
 
     if let Err(error) = builder.run(tauri::generate_context!()) {
         tracing::error!(?error, "failed to run AxiomPHP desktop application");

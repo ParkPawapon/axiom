@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorPanel } from "../../../shared/components/feedback/error-panel";
 import { LoadingState } from "../../../shared/components/feedback/loading-state";
@@ -6,22 +6,28 @@ import { WarningPanel } from "../../../shared/components/feedback/warning-panel"
 import { PageShell } from "../../../shared/components/layout/page-shell";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import {
+  createProject,
+  deleteProject,
   getProjectPhpProcessStatus,
   getProjectPhpVersion,
   installProjectPhpRuntime,
+  listProjects,
   selectProjectPhpVersion,
   startProjectPhpProcess,
   stopProjectPhpProcess,
+  updateProject,
 } from "../api/project.commands";
+import { ProjectFormShell } from "../components/project-form-shell";
+import { ProjectList } from "../components/project-list";
 import { ProjectPhpProcessPanel } from "../components/project-php-process-panel";
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
 import type {
   PhpRuntimeInstallProvider,
+  Project,
+  ProjectDraft,
   ProjectPhpProcessStatus,
   ProjectPhpVersionConfig,
 } from "../types/project.types";
-
-const currentProjectId = "current-project";
 
 function getErrorMessage(error: unknown) {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -32,7 +38,7 @@ function getErrorMessage(error: unknown) {
     }
   }
 
-  return "Project runtime command failed safely. Check the application logs for details.";
+  return "Project command failed safely. Check the application logs for details.";
 }
 
 const providerLabels: Record<PhpRuntimeInstallProvider, string> = {
@@ -43,32 +49,71 @@ const providerLabels: Record<PhpRuntimeInstallProvider, string> = {
 export function ProjectsPage() {
   const [config, setConfig] = useState<ProjectPhpVersionConfig>();
   const [draftVersion, setDraftVersion] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string>();
   const [isInstalling, setIsInstalling] = useState(false);
   const [isProcessBusy, setIsProcessBusy] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string>();
+  const [isProjectBusy, setIsProjectBusy] = useState(false);
+  const [isProjectsLoading, setIsProjectsLoading] = useState(true);
+  const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
+  const [isSavingRuntime, setIsSavingRuntime] = useState(false);
   const [noticeMessage, setNoticeMessage] = useState<string>();
   const [processStatus, setProcessStatus] = useState<ProjectPhpProcessStatus>();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
 
-  const loadConfig = useCallback(async () => {
-    setIsLoading(true);
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId),
+    [projects, selectedProjectId],
+  );
+
+  const loadProjects = useCallback(
+    async (preferredProjectId?: string) => {
+      setIsProjectsLoading(true);
+      setErrorMessage(undefined);
+
+      try {
+        const nextProjects = await listProjects();
+        setProjects(nextProjects);
+        setSelectedProjectId((currentProjectId) => {
+          const nextSelectedProjectId =
+            preferredProjectId ?? currentProjectId ?? nextProjects[0]?.id;
+
+          if (
+            nextSelectedProjectId &&
+            nextProjects.some((project) => project.id === nextSelectedProjectId)
+          ) {
+            return nextSelectedProjectId;
+          }
+
+          return nextProjects[0]?.id;
+        });
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsProjectsLoading(false);
+      }
+    },
+    [],
+  );
+
+  const loadConfig = useCallback(async (projectId: string) => {
+    setIsRuntimeLoading(true);
     setErrorMessage(undefined);
 
     try {
-      const nextConfig = await getProjectPhpVersion(currentProjectId);
+      const nextConfig = await getProjectPhpVersion(projectId);
       setConfig(nextConfig);
       setDraftVersion(nextConfig.selectedPhpVersion);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
-      setIsLoading(false);
+      setIsRuntimeLoading(false);
     }
   }, []);
 
-  const loadProcessStatus = useCallback(async () => {
+  const loadProcessStatus = useCallback(async (projectId: string) => {
     try {
-      const status = await getProjectPhpProcessStatus(currentProjectId);
+      const status = await getProjectPhpProcessStatus(projectId);
       setProcessStatus(status);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -76,19 +121,93 @@ export function ProjectsPage() {
   }, []);
 
   useEffect(() => {
-    void loadConfig();
-  }, [loadConfig]);
+    void loadProjects();
+  }, [loadProjects]);
 
   useEffect(() => {
-    void loadProcessStatus();
-  }, [loadProcessStatus]);
+    if (!selectedProjectId) {
+      setConfig(undefined);
+      setDraftVersion("");
+      setProcessStatus(undefined);
+      return;
+    }
+
+    void loadConfig(selectedProjectId);
+    void loadProcessStatus(selectedProjectId);
+  }, [loadConfig, loadProcessStatus, selectedProjectId]);
 
   const selectedOption = config?.availablePhpVersions.find(
     (version) => version.version === draftVersion,
   );
 
+  const handleCreateProject = useCallback(
+    async (draft: ProjectDraft) => {
+      setIsProjectBusy(true);
+      setErrorMessage(undefined);
+      setNoticeMessage(undefined);
+
+      try {
+        const project = await createProject(draft.name, draft.documentRoot);
+        await loadProjects(project.id);
+        setNoticeMessage(`${project.name} was added.`);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsProjectBusy(false);
+      }
+    },
+    [loadProjects],
+  );
+
+  const handleUpdateProject = useCallback(
+    async (projectId: string, draft: ProjectDraft) => {
+      setIsProjectBusy(true);
+      setErrorMessage(undefined);
+      setNoticeMessage(undefined);
+
+      try {
+        const project = await updateProject(projectId, draft.name, draft.documentRoot);
+        await loadProjects(project.id);
+        setNoticeMessage(`${project.name} was updated.`);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsProjectBusy(false);
+      }
+    },
+    [loadProjects],
+  );
+
+  const handleDeleteProject = useCallback(
+    async (projectId: string) => {
+      const project = projects.find((currentProject) => currentProject.id === projectId);
+      const shouldDelete = window.confirm(
+        `Delete ${project?.name ?? "this project"} from AxiomPHP configuration? This does not delete files from disk.`,
+      );
+
+      if (!shouldDelete) {
+        return;
+      }
+
+      setIsProjectBusy(true);
+      setErrorMessage(undefined);
+      setNoticeMessage(undefined);
+
+      try {
+        await deleteProject(projectId);
+        setNoticeMessage(`${project?.name ?? "Project"} was removed from configuration.`);
+        await loadProjects(selectedProjectId === projectId ? undefined : selectedProjectId);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsProjectBusy(false);
+      }
+    },
+    [loadProjects, projects, selectedProjectId],
+  );
+
   const handleInstall = useCallback(async () => {
-    if (!draftVersion || !selectedOption) {
+    if (!draftVersion || !selectedOption || !selectedProjectId) {
       return;
     }
 
@@ -111,44 +230,48 @@ export function ProjectsPage() {
     setNoticeMessage(undefined);
 
     try {
-      const installResult = await installProjectPhpRuntime(currentProjectId, draftVersion);
+      const installResult = await installProjectPhpRuntime(selectedProjectId, draftVersion);
       setNoticeMessage(
         `${installResult.statusMessage} Provider: ${providerLabels[installResult.provider]}. Package: ${installResult.packageName}.`,
       );
-      await loadConfig();
+      await loadConfig(selectedProjectId);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
       setIsInstalling(false);
     }
-  }, [draftVersion, loadConfig, selectedOption]);
+  }, [draftVersion, loadConfig, selectedOption, selectedProjectId]);
 
-  const handleSave = useCallback(async () => {
-    if (!draftVersion) {
+  const handleSaveRuntime = useCallback(async () => {
+    if (!draftVersion || !selectedProjectId) {
       return;
     }
 
-    setIsSaving(true);
+    setIsSavingRuntime(true);
     setErrorMessage(undefined);
     setNoticeMessage(undefined);
 
     try {
-      const nextConfig = await selectProjectPhpVersion(currentProjectId, draftVersion);
+      const nextConfig = await selectProjectPhpVersion(selectedProjectId, draftVersion);
       setConfig(nextConfig);
       setDraftVersion(nextConfig.selectedPhpVersion);
       setNoticeMessage(`PHP ${nextConfig.selectedPhpVersion} binary selected for this project.`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
-      setIsSaving(false);
+      setIsSavingRuntime(false);
     }
-  }, [draftVersion]);
+  }, [draftVersion, selectedProjectId]);
 
   const handleStartProcess = useCallback(async () => {
+    if (!selectedProjectId) {
+      return;
+    }
+
     const shouldStart = window.confirm(
       [
         "Start the selected PHP binary as a local project process?",
-        "AxiomPHP will bind the PHP built-in server to 127.0.0.1 only and use a backend-managed document root.",
+        "AxiomPHP will bind the PHP built-in server to 127.0.0.1 only. Document-root execution is not enabled in this branch.",
         "No shell command is built by the frontend. Continue?",
       ].join("\n\n"),
     );
@@ -162,69 +285,108 @@ export function ProjectsPage() {
     setNoticeMessage(undefined);
 
     try {
-      const status = await startProjectPhpProcess(currentProjectId);
+      const status = await startProjectPhpProcess(selectedProjectId);
       setProcessStatus(status);
       setNoticeMessage(status.statusMessage);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
-      await loadProcessStatus();
+      await loadProcessStatus(selectedProjectId);
     } finally {
       setIsProcessBusy(false);
     }
-  }, [loadProcessStatus]);
+  }, [loadProcessStatus, selectedProjectId]);
 
   const handleStopProcess = useCallback(async () => {
+    if (!selectedProjectId) {
+      return;
+    }
+
     setIsProcessBusy(true);
     setErrorMessage(undefined);
     setNoticeMessage(undefined);
 
     try {
-      const status = await stopProjectPhpProcess(currentProjectId);
+      const status = await stopProjectPhpProcess(selectedProjectId);
       setProcessStatus(status);
       setNoticeMessage(status.statusMessage);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
-      await loadProcessStatus();
+      await loadProcessStatus(selectedProjectId);
     } finally {
       setIsProcessBusy(false);
     }
-  }, [loadProcessStatus]);
+  }, [loadProcessStatus, selectedProjectId]);
 
   return (
     <PageShell
       title="Projects"
-      description="Project runtime preferences, PHP installation, and PHP project process execution are controlled by the Rust backend."
+      description="Project configuration is persisted by the Rust backend. Runtime controls apply to the selected project profile."
     >
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
       {noticeMessage ? <WarningPanel message={noticeMessage} /> : null}
-      {isLoading ? <LoadingState label="Loading project runtime preference" /> : null}
-      {!isLoading && config ? (
-        <div className="grid gap-5">
-          <ProjectPhpVersionSelector
-            config={config}
-            draftVersion={draftVersion}
-            isInstalling={isInstalling}
-            isSaving={isSaving}
-            onDraftVersionChange={setDraftVersion}
-            onInstall={handleInstall}
-            onSave={handleSave}
-          />
-          <ProjectPhpProcessPanel
-            canStart={Boolean(config.selectedPhpBinary)}
-            isBusy={isProcessBusy}
-            status={processStatus}
-            onRefresh={loadProcessStatus}
-            onStart={handleStartProcess}
-            onStop={handleStopProcess}
-          />
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
+        <div className="grid content-start gap-5">
+          <ProjectFormShell isBusy={isProjectBusy} onCreate={handleCreateProject} />
+
+          {isProjectsLoading ? <LoadingState label="Loading projects" /> : null}
+          {!isProjectsLoading && projects.length === 0 ? (
+            <EmptyState
+              title="No projects configured"
+              description="Add a PHP project and select its document root to create a persisted project profile."
+            />
+          ) : null}
+          {projects.length > 0 ? (
+            <ProjectList
+              activeProjectId={selectedProjectId}
+              isBusy={isProjectBusy}
+              projects={projects}
+              onDelete={handleDeleteProject}
+              onSelect={setSelectedProjectId}
+              onUpdate={handleUpdateProject}
+            />
+          ) : null}
         </div>
-      ) : null}
-      {!isLoading && !config ? (
-        <EmptyState
-          title="No project runtime profile"
-          description="The backend did not return a project runtime configuration."
-        />
-      ) : null}
+
+        <div className="grid content-start gap-5">
+          {selectedProject ? (
+            <section className="border-2 border-voicebox-black bg-white p-5">
+              <p className="font-mono text-xs uppercase text-voicebox-secondary">
+                Selected Project
+              </p>
+              <h2 className="mt-1 font-display text-2xl uppercase leading-none text-voicebox-black">
+                {selectedProject.name}
+              </h2>
+              <p className="mt-3 break-words font-mono text-xs text-voicebox-secondary">
+                {selectedProject.documentRoot}
+              </p>
+            </section>
+          ) : null}
+
+          {isRuntimeLoading ? <LoadingState label="Loading project runtime preference" /> : null}
+          {!isRuntimeLoading && selectedProject && config ? (
+            <>
+              <ProjectPhpVersionSelector
+                config={config}
+                draftVersion={draftVersion}
+                isInstalling={isInstalling}
+                isSaving={isSavingRuntime}
+                onDraftVersionChange={setDraftVersion}
+                onInstall={handleInstall}
+                onSave={handleSaveRuntime}
+              />
+              <ProjectPhpProcessPanel
+                canStart={Boolean(config.selectedPhpBinary)}
+                isBusy={isProcessBusy}
+                status={processStatus}
+                onRefresh={() => void loadProcessStatus(selectedProject.id)}
+                onStart={handleStartProcess}
+                onStop={handleStopProcess}
+              />
+            </>
+          ) : null}
+        </div>
+      </div>
     </PageShell>
   );
 }
