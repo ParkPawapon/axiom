@@ -1,4 +1,4 @@
 export const appConfig = {
   name: "AxiomPHP",
-  tagline: "Architecture scaffold only",
+  tagline: "Local PHP environment control center",
 } as const;

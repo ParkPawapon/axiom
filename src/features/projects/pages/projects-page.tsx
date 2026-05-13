@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 import { ErrorPanel } from "../../../shared/components/feedback/error-panel";
 import { LoadingState } from "../../../shared/components/feedback/loading-state";
@@ -73,40 +74,34 @@ export function ProjectsPage() {
     [projects, selectedProjectId],
   );
 
-  const loadProjects = useCallback(
-    async (preferredProjectId?: string) => {
-      setIsProjectsLoading(true);
-      setErrorMessage(undefined);
+  const loadProjects = useCallback(async (preferredProjectId?: string) => {
+    setIsProjectsLoading(true);
+    setErrorMessage(undefined);
 
-      try {
-        const nextProjects = await listProjects();
-        setProjects(nextProjects);
-        setSelectedActionProjectIds((currentIds) =>
-          currentIds.filter((projectId) =>
-            nextProjects.some((project) => project.id === projectId),
-          ),
-        );
-        setSelectedProjectId((currentProjectId) => {
-          const nextSelectedProjectId =
-            preferredProjectId ?? currentProjectId ?? nextProjects[0]?.id;
+    try {
+      const nextProjects = await listProjects();
+      setProjects(nextProjects);
+      setSelectedActionProjectIds((currentIds) =>
+        currentIds.filter((projectId) => nextProjects.some((project) => project.id === projectId)),
+      );
+      setSelectedProjectId((currentProjectId) => {
+        const nextSelectedProjectId = preferredProjectId ?? currentProjectId ?? nextProjects[0]?.id;
 
-          if (
-            nextSelectedProjectId &&
-            nextProjects.some((project) => project.id === nextSelectedProjectId)
-          ) {
-            return nextSelectedProjectId;
-          }
+        if (
+          nextSelectedProjectId &&
+          nextProjects.some((project) => project.id === nextSelectedProjectId)
+        ) {
+          return nextSelectedProjectId;
+        }
 
-          return nextProjects[0]?.id;
-        });
-      } catch (error) {
-        setErrorMessage(getErrorMessage(error));
-      } finally {
-        setIsProjectsLoading(false);
-      }
-    },
-    [],
-  );
+        return nextProjects[0]?.id;
+      });
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsProjectsLoading(false);
+    }
+  }, []);
 
   const loadConfig = useCallback(async (projectId: string) => {
     setIsRuntimeLoading(true);
@@ -198,8 +193,9 @@ export function ProjectsPage() {
   const handleDeleteProject = useCallback(
     async (projectId: string) => {
       const project = projects.find((currentProject) => currentProject.id === projectId);
-      const shouldDelete = window.confirm(
+      const shouldDelete = await confirm(
         `Delete ${project?.name ?? "this project"} from AxiomPHP configuration? This does not delete files from disk.`,
+        { kind: "warning", title: "Delete project profile" },
       );
 
       if (!shouldDelete) {
@@ -228,7 +224,7 @@ export function ProjectsPage() {
       return;
     }
 
-    const shouldInstall = window.confirm(
+    const shouldInstall = await confirm(
       [
         `${selectedOption.label} is not installed for this project.`,
         selectedOption.lifecycleWarning ?? "Install only from a trusted PHP runtime source.",
@@ -236,6 +232,7 @@ export function ProjectsPage() {
         "No shell command is built by the frontend. Only the resolved package-manager executable is allowed by the backend command policy.",
         "Continue?",
       ].join("\n\n"),
+      { kind: "warning", title: "Install PHP runtime" },
     );
 
     if (!shouldInstall) {
@@ -319,12 +316,13 @@ export function ProjectsPage() {
       return;
     }
 
-    const shouldStart = window.confirm(
+    const shouldStart = await confirm(
       [
         "Start the selected PHP binary as a local project process?",
         "AxiomPHP will bind the PHP built-in server to 127.0.0.1 only and serve the selected project's document root.",
         "No shell command is built by the frontend. Continue?",
       ].join("\n\n"),
+      { kind: "info", title: "Start project process" },
     );
 
     if (!shouldStart) {
@@ -373,12 +371,13 @@ export function ProjectsPage() {
       return;
     }
 
-    const shouldRestart = window.confirm(
+    const shouldRestart = await confirm(
       [
         "Restart the selected PHP project process?",
         "AxiomPHP will stop the selected project process if it is running, then start it again with its persisted PHP binary and document root.",
         "No shell command is built by the frontend. Continue?",
       ].join("\n\n"),
+      { kind: "warning", title: "Restart project process" },
     );
 
     if (!shouldRestart) {
@@ -407,14 +406,14 @@ export function ProjectsPage() {
         return;
       }
 
-      const actionLabel =
-        action === "start" ? "Start" : action === "stop" ? "Stop" : "Restart";
-      const shouldRun = window.confirm(
+      const actionLabel = action === "start" ? "Start" : action === "stop" ? "Stop" : "Restart";
+      const shouldRun = await confirm(
         [
           `${actionLabel} PHP project processes for ${selectedActionProjectIds.length} selected projects?`,
           "AxiomPHP runs each project action through the Rust backend. Each project is isolated and same-project actions are guarded.",
           "No shell command is built by the frontend. Continue?",
         ].join("\n\n"),
+        { kind: "warning", title: `${actionLabel} selected project processes` },
       );
 
       if (!shouldRun) {
@@ -444,12 +443,7 @@ export function ProjectsPage() {
         setIsProcessBusy(false);
       }
     },
-    [
-      loadProcessStatus,
-      selectedActionProjectIds,
-      selectedProjectId,
-      summarizeBatchResults,
-    ],
+    [loadProcessStatus, selectedActionProjectIds, selectedProjectId, summarizeBatchResults],
   );
 
   return (

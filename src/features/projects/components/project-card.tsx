@@ -90,7 +90,11 @@ export function ProjectCard({
             />
             Process action target
           </label>
-          <button className="grid gap-2 text-left" onClick={() => onSelect(project.id)} type="button">
+          <button
+            className="grid gap-2 text-left"
+            onClick={() => onSelect(project.id)}
+            type="button"
+          >
             <span className="font-display text-xl uppercase leading-none text-voicebox-black">
               {project.name}
             </span>

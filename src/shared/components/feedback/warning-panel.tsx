@@ -3,5 +3,9 @@ interface WarningPanelProps {
 }
 
 export function WarningPanel({ message }: WarningPanelProps) {
-  return <div className="border border-voicebox-warning bg-white p-4 text-sm text-voicebox-warning">{message}</div>;
+  return (
+    <div className="border border-voicebox-warning bg-white p-4 text-sm text-voicebox-warning">
+      {message}
+    </div>
+  );
 }
