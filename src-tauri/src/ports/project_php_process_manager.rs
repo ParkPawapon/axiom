@@ -21,5 +21,13 @@ pub trait ProjectPhpProcessManager: Send + Sync {
 
     fn stop_php_process(&self, project_id: &ProjectId) -> AppResult<ProjectPhpProcessStatus>;
 
+    fn restart_php_process(
+        &self,
+        request: StartProjectPhpProcessRequest,
+    ) -> AppResult<ProjectPhpProcessStatus> {
+        self.stop_php_process(&request.project_id)?;
+        self.start_php_process(request)
+    }
+
     fn get_php_process_status(&self, project_id: &ProjectId) -> AppResult<ProjectPhpProcessStatus>;
 }

@@ -8,17 +8,21 @@ import { ProjectPathPicker } from "./project-path-picker";
 interface ProjectCardProps {
   isActive: boolean;
   isBusy: boolean;
+  isSelectedForAction: boolean;
   project: Project;
   onDelete: (projectId: string) => Promise<void>;
   onSelect: (projectId: string) => void;
+  onToggleActionSelection: (projectId: string) => void;
   onUpdate: (projectId: string, draft: ProjectDraft) => Promise<void>;
 }
 
 export function ProjectCard({
   isActive,
   isBusy,
+  isSelectedForAction,
   onDelete,
   onSelect,
+  onToggleActionSelection,
   onUpdate,
   project,
 }: ProjectCardProps) {
@@ -77,6 +81,15 @@ export function ProjectCard({
         </div>
       ) : (
         <div className="grid gap-4">
+          <label className="flex items-center gap-3 border border-voicebox-border bg-voicebox-surface p-2 font-mono text-xs uppercase text-voicebox-secondary">
+            <input
+              checked={isSelectedForAction}
+              disabled={isBusy}
+              onChange={() => onToggleActionSelection(project.id)}
+              type="checkbox"
+            />
+            Process action target
+          </label>
           <button className="grid gap-2 text-left" onClick={() => onSelect(project.id)} type="button">
             <span className="font-display text-xl uppercase leading-none text-voicebox-black">
               {project.name}
