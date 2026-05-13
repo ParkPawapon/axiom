@@ -6,5 +6,7 @@ use super::project_path::ProjectPath;
 pub struct Project {
     pub id: ProjectId,
     pub name: String,
-    pub path: ProjectPath,
+    pub document_root: ProjectPath,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }

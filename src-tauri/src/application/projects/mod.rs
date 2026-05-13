@@ -1,10 +1,13 @@
 pub mod create_project_use_case;
+pub mod delete_project_use_case;
 pub mod get_project_php_process_status_use_case;
 pub mod get_project_php_version_use_case;
+pub mod get_project_use_case;
 pub mod install_project_php_runtime_use_case;
 pub mod list_projects_use_case;
 pub mod request_project_php_install_use_case;
 pub mod select_project_php_version_use_case;
 pub mod start_project_php_process_use_case;
 pub mod stop_project_php_process_use_case;
+pub mod update_project_use_case;
 pub mod validate_project_path_use_case;
