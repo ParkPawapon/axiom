@@ -1,11 +1,31 @@
-import type { ProjectLogSource } from "../types/log.types";
+import { Chip } from "../../../shared/components/ui/chip";
+import type { LogLevel, ProjectLogReadResult, ProjectLogSource } from "../types/log.types";
 
 interface LogViewerProps {
-  query: string;
+  result?: ProjectLogReadResult;
   source?: ProjectLogSource;
 }
 
-export function LogViewer({ query, source }: LogViewerProps) {
+const levelTone: Record<LogLevel, "neutral" | "success" | "warning" | "error"> = {
+  debug: "neutral",
+  error: "error",
+  info: "success",
+  warn: "warning",
+};
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function LogViewer({ result, source }: LogViewerProps) {
   if (!source) {
     return (
       <section className="border-2 border-voicebox-black bg-white p-5">
@@ -19,13 +39,6 @@ export function LogViewer({ query, source }: LogViewerProps) {
     );
   }
 
-  const metadataLines = [
-    `Project: ${source.projectName}`,
-    `State: ${source.processState}`,
-    `Log file: ${source.logFile ?? "Created when the project process starts"}`,
-    `Backend message: ${source.statusMessage}`,
-  ].filter((line) => line.toLowerCase().includes(query.toLowerCase()));
-
   return (
     <section className="border-2 border-voicebox-black bg-white p-5">
       <div className="border-b border-voicebox-border pb-4">
@@ -33,16 +46,43 @@ export function LogViewer({ query, source }: LogViewerProps) {
         <h2 className="mt-1 font-display text-2xl uppercase leading-none text-voicebox-black">
           {source.projectName}
         </h2>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Chip tone={source.processState === "running" ? "success" : "neutral"}>
+            {source.processState}
+          </Chip>
+          {result ? <Chip>{result.returnedLines} lines</Chip> : null}
+          {result?.truncated ? <Chip tone="warning">Tail view</Chip> : null}
+        </div>
       </div>
-      <pre className="mt-5 min-h-64 overflow-auto border border-voicebox-border bg-voicebox-black p-4 font-mono text-xs leading-relaxed text-white">
-        {metadataLines.length > 0
-          ? metadataLines.join("\n")
-          : "No visible log metadata matches the current filter."}
-      </pre>
-      <p className="mt-4 border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
-        Streaming and file tailing are intentionally not implemented in this frontend-only pass. The
-        UI only exposes backend process log metadata that already exists.
-      </p>
+
+      <div className="mt-5 grid max-h-[32rem] gap-2 overflow-auto border border-voicebox-border bg-voicebox-black p-3">
+        {result?.entries.length ? (
+          result.entries.map((entry) => (
+            <article
+              className="grid gap-2 border border-neutral-700 bg-neutral-950 p-3 text-white lg:grid-cols-[5rem_6rem_minmax(0,1fr)]"
+              key={entry.id}
+            >
+              <span className="font-mono text-xs text-neutral-400">#{entry.lineNumber}</span>
+              <Chip tone={levelTone[entry.level]}>{entry.level}</Chip>
+              <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-white">
+                {entry.message}
+              </pre>
+            </article>
+          ))
+        ) : (
+          <p className="p-3 font-mono text-xs text-white">
+            {result?.statusMessage ?? "Select a project log source to read the log file."}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-4 grid gap-2 border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
+        <p>{result?.statusMessage ?? source.statusMessage}</p>
+        <p className="break-words">
+          Log file: {result?.logFile ?? source.logFile ?? "Created when the process starts"}
+        </p>
+        {result ? <p>File size: {formatFileSize(result.fileSizeBytes)}</p> : null}
+      </div>
     </section>
   );
 }

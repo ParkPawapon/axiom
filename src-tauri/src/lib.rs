@@ -39,6 +39,7 @@ pub fn run() {
             commands::project_commands::stop_project_php_processes,
             commands::project_commands::restart_project_php_process,
             commands::project_commands::restart_project_php_processes,
+            commands::log_commands::read_project_logs,
             commands::service_commands::list_services,
             commands::service_commands::get_service_status,
             commands::service_commands::start_service,
