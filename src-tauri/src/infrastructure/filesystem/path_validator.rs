@@ -1,1 +1,1 @@
-// Future path canonicalization and safety validation adapter.
+pub struct PathValidator;

@@ -1,3 +1,3 @@
-import { voiceboxTokens } from "../design-system/voicebox.tokens";
-
-export const tailwindThemeTokens = voiceboxTokens;
+export const tailwindTheme = {
+  radius: 0,
+} as const;

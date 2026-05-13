@@ -1,1 +1,1 @@
-export const logCommands = {} as const;
+export {};

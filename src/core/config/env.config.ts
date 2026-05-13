@@ -1,3 +1,4 @@
 export const envConfig = {
-  appName: import.meta.env.VITE_APP_NAME ?? "AxiomPHP",
+  appMode: import.meta.env.MODE,
+  isDevelopment: import.meta.env.DEV,
 } as const;

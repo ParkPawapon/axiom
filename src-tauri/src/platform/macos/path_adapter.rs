@@ -1,1 +1,1 @@
-// Future macOS path adapter.
+pub struct MacosPathAdapter;

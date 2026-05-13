@@ -1,1 +1,1 @@
-// Future settings loading orchestration belongs here.
+pub fn read_settings_use_case_placeholder() {}

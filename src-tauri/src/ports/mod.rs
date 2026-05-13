@@ -6,6 +6,7 @@ pub mod php_runtime_detector;
 pub mod php_runtime_installer;
 pub mod port_scanner;
 pub mod process_manager;
+pub mod project_php_process_manager;
 pub mod project_repository;
 pub mod project_runtime_repository;
 pub mod secure_storage;

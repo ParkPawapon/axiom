@@ -1,1 +1,1 @@
-export const databaseCommands = {} as const;
+export {};

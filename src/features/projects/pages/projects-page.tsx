@@ -6,12 +6,20 @@ import { WarningPanel } from "../../../shared/components/feedback/warning-panel"
 import { PageShell } from "../../../shared/components/layout/page-shell";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import {
+  getProjectPhpProcessStatus,
   getProjectPhpVersion,
   installProjectPhpRuntime,
   selectProjectPhpVersion,
+  startProjectPhpProcess,
+  stopProjectPhpProcess,
 } from "../api/project.commands";
+import { ProjectPhpProcessPanel } from "../components/project-php-process-panel";
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
-import type { PhpRuntimeInstallProvider, ProjectPhpVersionConfig } from "../types/project.types";
+import type {
+  PhpRuntimeInstallProvider,
+  ProjectPhpProcessStatus,
+  ProjectPhpVersionConfig,
+} from "../types/project.types";
 
 const currentProjectId = "current-project";
 
@@ -37,9 +45,11 @@ export function ProjectsPage() {
   const [draftVersion, setDraftVersion] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [isProcessBusy, setIsProcessBusy] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
   const [noticeMessage, setNoticeMessage] = useState<string>();
+  const [processStatus, setProcessStatus] = useState<ProjectPhpProcessStatus>();
 
   const loadConfig = useCallback(async () => {
     setIsLoading(true);
@@ -56,9 +66,22 @@ export function ProjectsPage() {
     }
   }, []);
 
+  const loadProcessStatus = useCallback(async () => {
+    try {
+      const status = await getProjectPhpProcessStatus(currentProjectId);
+      setProcessStatus(status);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  }, []);
+
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    void loadProcessStatus();
+  }, [loadProcessStatus]);
 
   const selectedOption = config?.availablePhpVersions.find(
     (version) => version.version === draftVersion,
@@ -121,24 +144,80 @@ export function ProjectsPage() {
     }
   }, [draftVersion]);
 
+  const handleStartProcess = useCallback(async () => {
+    const shouldStart = window.confirm(
+      [
+        "Start the selected PHP binary as a local project process?",
+        "AxiomPHP will bind the PHP built-in server to 127.0.0.1 only and use a backend-managed document root.",
+        "No shell command is built by the frontend. Continue?",
+      ].join("\n\n"),
+    );
+
+    if (!shouldStart) {
+      return;
+    }
+
+    setIsProcessBusy(true);
+    setErrorMessage(undefined);
+    setNoticeMessage(undefined);
+
+    try {
+      const status = await startProjectPhpProcess(currentProjectId);
+      setProcessStatus(status);
+      setNoticeMessage(status.statusMessage);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+      await loadProcessStatus();
+    } finally {
+      setIsProcessBusy(false);
+    }
+  }, [loadProcessStatus]);
+
+  const handleStopProcess = useCallback(async () => {
+    setIsProcessBusy(true);
+    setErrorMessage(undefined);
+    setNoticeMessage(undefined);
+
+    try {
+      const status = await stopProjectPhpProcess(currentProjectId);
+      setProcessStatus(status);
+      setNoticeMessage(status.statusMessage);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+      await loadProcessStatus();
+    } finally {
+      setIsProcessBusy(false);
+    }
+  }, [loadProcessStatus]);
+
   return (
     <PageShell
       title="Projects"
-      description="Project runtime preferences and PHP binary installation are controlled by the Rust backend. Project process execution remains disabled."
+      description="Project runtime preferences, PHP installation, and PHP project process execution are controlled by the Rust backend."
     >
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
       {noticeMessage ? <WarningPanel message={noticeMessage} /> : null}
       {isLoading ? <LoadingState label="Loading project runtime preference" /> : null}
       {!isLoading && config ? (
-        <ProjectPhpVersionSelector
-          config={config}
-          draftVersion={draftVersion}
-          isInstalling={isInstalling}
-          isSaving={isSaving}
-          onDraftVersionChange={setDraftVersion}
-          onInstall={handleInstall}
-          onSave={handleSave}
-        />
+        <div className="grid gap-5">
+          <ProjectPhpVersionSelector
+            config={config}
+            draftVersion={draftVersion}
+            isInstalling={isInstalling}
+            isSaving={isSaving}
+            onDraftVersionChange={setDraftVersion}
+            onInstall={handleInstall}
+            onSave={handleSave}
+          />
+          <ProjectPhpProcessPanel
+            canStart={Boolean(config.selectedPhpBinary)}
+            isBusy={isProcessBusy}
+            status={processStatus}
+            onRefresh={loadProcessStatus}
+            onStart={handleStartProcess}
+            onStop={handleStopProcess}
+          />
+        </div>
       ) : null}
       {!isLoading && !config ? (
         <EmptyState

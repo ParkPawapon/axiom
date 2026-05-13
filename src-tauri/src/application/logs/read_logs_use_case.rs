@@ -1,1 +1,1 @@
-// Future log reading orchestration belongs here.
+pub fn read_logs_use_case_placeholder() {}

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ProcessTimeoutGuard {
     started_at: Instant,
     timeout: Duration,
@@ -14,15 +14,11 @@ impl ProcessTimeoutGuard {
         }
     }
 
-    pub fn elapsed(&self) -> Duration {
-        self.started_at.elapsed()
+    pub fn is_expired(&self) -> bool {
+        self.started_at.elapsed() >= self.timeout
     }
 
     pub fn elapsed_ms(&self) -> u128 {
-        self.elapsed().as_millis()
-    }
-
-    pub fn is_expired(&self) -> bool {
-        self.elapsed() >= self.timeout
+        self.started_at.elapsed().as_millis()
     }
 }

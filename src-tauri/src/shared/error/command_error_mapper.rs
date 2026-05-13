@@ -4,6 +4,7 @@ use super::app_error::AppError;
 use super::error_code::ErrorCode;
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandErrorPayload {
     pub code: ErrorCode,
     pub message: String,

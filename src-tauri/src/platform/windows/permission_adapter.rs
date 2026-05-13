@@ -1,1 +1,1 @@
-// Future Windows permission adapter.
+pub struct WindowsPermissionAdapter;

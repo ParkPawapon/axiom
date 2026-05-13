@@ -2,6 +2,7 @@ import { invokeTauriCommand } from "../../../core/api/tauri-client";
 import type {
   ProjectPhpInstallPlan,
   ProjectPhpInstallResult,
+  ProjectPhpProcessStatus,
   ProjectPhpVersionConfig,
 } from "../types/project.types";
 
@@ -30,4 +31,18 @@ export function installProjectPhpRuntime(projectId: string, phpVersion: string) 
     projectId,
     phpVersion,
   });
+}
+
+export function getProjectPhpProcessStatus(projectId: string) {
+  return invokeTauriCommand<ProjectPhpProcessStatus>("get_project_php_process_status", {
+    projectId,
+  });
+}
+
+export function startProjectPhpProcess(projectId: string) {
+  return invokeTauriCommand<ProjectPhpProcessStatus>("start_project_php_process", { projectId });
+}
+
+export function stopProjectPhpProcess(projectId: string) {
+  return invokeTauriCommand<ProjectPhpProcessStatus>("stop_project_php_process", { projectId });
 }

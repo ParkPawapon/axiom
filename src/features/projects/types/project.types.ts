@@ -51,3 +51,18 @@ export interface ProjectPhpInstallResult {
   readonly selectedPhpBinary?: DetectedPhpBinary;
   readonly statusMessage: string;
 }
+
+export type ProjectPhpProcessState = "failed" | "running" | "stopped";
+
+export interface ProjectPhpProcessStatus {
+  readonly projectId: string;
+  readonly state: ProjectPhpProcessState;
+  readonly pid?: number;
+  readonly phpVersion?: string;
+  readonly port?: number;
+  readonly url?: string;
+  readonly documentRoot?: string;
+  readonly logFile?: string;
+  readonly startedAt?: string;
+  readonly statusMessage: string;
+}

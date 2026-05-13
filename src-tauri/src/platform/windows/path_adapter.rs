@@ -1,1 +1,1 @@
-// Future Windows path adapter.
+pub struct WindowsPathAdapter;

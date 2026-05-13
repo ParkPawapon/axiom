@@ -1,1 +1,1 @@
-export const settingsCommands = {} as const;
+export {};

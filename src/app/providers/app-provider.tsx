@@ -11,9 +11,9 @@ interface AppProviderProps {
 export function AppProvider({ children }: AppProviderProps) {
   return (
     <MuiProvider>
-      <MotionProvider>
-        <QueryProvider>{children}</QueryProvider>
-      </MotionProvider>
+      <QueryProvider>
+        <MotionProvider>{children}</MotionProvider>
+      </QueryProvider>
     </MuiProvider>
   );
 }

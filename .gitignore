@@ -1,15 +1,7 @@
 node_modules/
 dist/
-dist-ssr/
+src-tauri/target/
 .DS_Store
 .env
-.env.*
-!.env.example
-
-src-tauri/target/
-src-tauri/gen/
-src-tauri/.cargo/
-
+.env.local
 *.log
-*.local
-*.tsbuildinfo

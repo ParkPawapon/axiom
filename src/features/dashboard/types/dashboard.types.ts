@@ -1,1 +1,1 @@
-export type DashboardPanelStatus = "placeholder";
+export {};

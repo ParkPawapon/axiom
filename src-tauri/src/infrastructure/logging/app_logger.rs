@@ -1,1 +1,1 @@
-// Future audit and application logger adapter.
+pub struct AppLogger;

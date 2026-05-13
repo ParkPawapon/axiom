@@ -1,1 +1,1 @@
-pub type IsoDateTime = String;
+pub fn date_time_placeholder() {}

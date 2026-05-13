@@ -1,8 +1,2 @@
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub enum LogSource {
-    Application,
-    Php,
-    Mysql,
-    Postgresql,
-    ReverseProxy,
-}
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct LogSource(pub String);

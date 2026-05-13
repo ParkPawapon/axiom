@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "camelCase")]
 pub enum ErrorCode {
-    ValidationFailed,
-    NotFound,
-    PermissionDenied,
     ConfigurationError,
     InfrastructureError,
+    NotFound,
+    PermissionDenied,
     Unexpected,
+    ValidationFailed,
 }

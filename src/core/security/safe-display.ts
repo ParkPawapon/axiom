@@ -1,3 +1,3 @@
-export function redactSecretLikeValue(value: string): string {
-  return value.length > 0 ? "[redacted]" : "";
+export function safeDisplay(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }

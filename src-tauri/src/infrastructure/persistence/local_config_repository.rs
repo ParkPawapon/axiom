@@ -1,1 +1,1 @@
-// Future local settings persistence adapter.
+pub struct LocalConfigRepository;

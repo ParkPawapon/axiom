@@ -1,1 +1,1 @@
-// Future file log reader adapter.
+pub struct FileLogReader;

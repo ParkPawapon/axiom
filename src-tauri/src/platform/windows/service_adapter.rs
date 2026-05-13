@@ -1,1 +1,1 @@
-// Future Windows service adapter.
+pub struct WindowsServiceAdapter;

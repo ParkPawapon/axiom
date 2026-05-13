@@ -1,1 +1,1 @@
-// Future local certificate manager adapter.
+pub struct LocalCertificateManager;
