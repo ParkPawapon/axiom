@@ -51,12 +51,28 @@ export interface ProjectPhpInstallPlan {
 
 export type PhpRuntimeInstallProvider = "homebrew" | "scoop";
 
+export type PhpRuntimeInstallDiagnosticLevel = "info" | "warning";
+
+export interface PhpRuntimeInstallDiagnostic {
+  readonly level: PhpRuntimeInstallDiagnosticLevel;
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface PhpRuntimeInstallRollback {
+  readonly attempted: boolean;
+  readonly succeeded: boolean;
+  readonly message: string;
+}
+
 export interface ProjectPhpInstallResult {
   readonly projectId: string;
   readonly phpVersion: string;
   readonly provider: PhpRuntimeInstallProvider;
   readonly packageName: string;
   readonly selectedPhpBinary?: DetectedPhpBinary;
+  readonly diagnostics: PhpRuntimeInstallDiagnostic[];
+  readonly rollback?: PhpRuntimeInstallRollback;
   readonly statusMessage: string;
 }
 

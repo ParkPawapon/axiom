@@ -41,6 +41,8 @@ pub struct ProjectPhpInstallResult {
     pub provider: PhpRuntimeInstallProvider,
     pub package_name: String,
     pub selected_php_binary: Option<DetectedPhpBinary>,
+    pub diagnostics: Vec<PhpRuntimeInstallDiagnostic>,
+    pub rollback: Option<PhpRuntimeInstallRollback>,
     pub status_message: String,
 }
 
@@ -58,4 +60,45 @@ impl PhpRuntimeInstallProvider {
             Self::Scoop => "Scoop",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PhpRuntimeInstallDiagnosticLevel {
+    Info,
+    Warning,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhpRuntimeInstallDiagnostic {
+    pub level: PhpRuntimeInstallDiagnosticLevel,
+    pub code: String,
+    pub message: String,
+}
+
+impl PhpRuntimeInstallDiagnostic {
+    pub fn info(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            level: PhpRuntimeInstallDiagnosticLevel::Info,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn warning(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            level: PhpRuntimeInstallDiagnosticLevel::Warning,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhpRuntimeInstallRollback {
+    pub attempted: bool,
+    pub succeeded: bool,
+    pub message: String,
 }

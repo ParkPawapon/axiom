@@ -45,6 +45,8 @@ pub fn install_project_php_runtime(
             provider: provider_for_current_platform()?,
             package_name: "already-installed".to_string(),
             selected_php_binary: Some(binary),
+            diagnostics: Vec::new(),
+            rollback: None,
             status_message:
                 "Matching PHP binary is already installed. Project runtime selection was updated."
                     .to_string(),
@@ -82,6 +84,8 @@ pub fn install_project_php_runtime(
         provider: install_report.provider,
         package_name: install_report.package_name,
         selected_php_binary,
+        diagnostics: install_report.diagnostics,
+        rollback: install_report.rollback,
         status_message,
     })
 }
@@ -203,6 +207,8 @@ mod tests {
             Ok(PhpRuntimeInstallReport {
                 provider: PhpRuntimeInstallProvider::Homebrew,
                 package_name: format!("php@{}", version.as_str()),
+                diagnostics: Vec::new(),
+                rollback: None,
                 status_message: "installed".to_string(),
             })
         }

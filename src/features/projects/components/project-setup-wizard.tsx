@@ -22,6 +22,7 @@ import type {
   ProjectPhpProcessStatus,
   ProjectPhpVersionConfig,
 } from "../types/project.types";
+import { formatPhpInstallResult } from "../utils/format-php-install-result";
 import { ProjectPathPicker } from "./project-path-picker";
 
 type WizardStep = "details" | "runtime" | "process" | "done";
@@ -123,7 +124,7 @@ export function ProjectSetupWizard({ onProjectReady }: ProjectSetupWizardProps) 
 
       setRuntimeConfig(config);
       setDraftVersion(config.selectedPhpVersion);
-      setNoticeMessage(`${result.statusMessage} Package: ${result.packageName}.`);
+      setNoticeMessage(formatPhpInstallResult(result));
       await onProjectReady(createdProject.id);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "PHP runtime installation failed safely."));

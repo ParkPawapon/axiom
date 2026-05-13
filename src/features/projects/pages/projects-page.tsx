@@ -27,13 +27,13 @@ import { ProjectPhpProcessPanel } from "../components/project-php-process-panel"
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
 import { ProjectSetupWizard } from "../components/project-setup-wizard";
 import type {
-  PhpRuntimeInstallProvider,
   Project,
   ProjectDraft,
   ProjectPhpProcessActionResult,
   ProjectPhpProcessStatus,
   ProjectPhpVersionConfig,
 } from "../types/project.types";
+import { formatPhpInstallResult } from "../utils/format-php-install-result";
 
 function getErrorMessage(error: unknown) {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -46,11 +46,6 @@ function getErrorMessage(error: unknown) {
 
   return "Project command failed safely. Check the application logs for details.";
 }
-
-const providerLabels: Record<PhpRuntimeInstallProvider, string> = {
-  homebrew: "Homebrew",
-  scoop: "Scoop",
-};
 
 export function ProjectsPage() {
   const [config, setConfig] = useState<ProjectPhpVersionConfig>();
@@ -225,9 +220,7 @@ export function ProjectsPage() {
 
     try {
       const installResult = await installProjectPhpRuntime(selectedProjectId, draftVersion);
-      setNoticeMessage(
-        `${installResult.statusMessage} Provider: ${providerLabels[installResult.provider]}. Package: ${installResult.packageName}.`,
-      );
+      setNoticeMessage(formatPhpInstallResult(installResult));
       await loadConfig(selectedProjectId);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
