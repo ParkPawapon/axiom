@@ -29,6 +29,7 @@ pub struct ProcessCommand {
     pub args: Vec<String>,
     pub current_dir: Option<PathBuf>,
     pub env: BTreeMap<String, String>,
+    pub stdin_file: Option<PathBuf>,
     pub timeout: Option<Duration>,
 }
 
@@ -39,6 +40,7 @@ impl ProcessCommand {
             args: Vec::new(),
             current_dir: None,
             env: BTreeMap::new(),
+            stdin_file: None,
             timeout: None,
         }
     }
@@ -55,6 +57,11 @@ impl ProcessCommand {
 
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn stdin_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.stdin_file = Some(path.into());
         self
     }
 
@@ -150,6 +157,7 @@ impl CommandPolicy {
         self.validate_args(&command.args)?;
         self.validate_current_dir(command.current_dir.as_deref())?;
         self.validate_env(&command.env)?;
+        self.validate_stdin_file(command.stdin_file.as_deref())?;
 
         if let Some(timeout) = command.timeout {
             if timeout.is_zero() {
@@ -250,6 +258,26 @@ impl CommandPolicy {
                     "process environment value exceeds the command policy limit".to_string(),
                 ));
             }
+        }
+
+        Ok(())
+    }
+
+    fn validate_stdin_file(&self, stdin_file: Option<&Path>) -> AppResult<()> {
+        let Some(stdin_file) = stdin_file else {
+            return Ok(());
+        };
+
+        if !stdin_file.is_absolute() {
+            return Err(AppError::Validation(
+                "process stdin file must be an absolute path".to_string(),
+            ));
+        }
+
+        if !stdin_file.is_file() {
+            return Err(AppError::Validation(
+                "process stdin file must exist and be a file".to_string(),
+            ));
         }
 
         Ok(())

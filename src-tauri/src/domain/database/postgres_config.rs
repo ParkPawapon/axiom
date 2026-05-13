@@ -1,2 +1,1 @@
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct PostgresConfig;
+pub const DEFAULT_POSTGRES_HOST: &str = "127.0.0.1";

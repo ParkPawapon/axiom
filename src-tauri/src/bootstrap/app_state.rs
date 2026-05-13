@@ -1,25 +1,33 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::infrastructure::databases::local_database_provisioner::LocalDatabaseProvisioner;
 use crate::infrastructure::logging::file_log_reader::FileLogReader;
+use crate::infrastructure::persistence::file_database_provisioning_repository::FileDatabaseProvisioningRepository;
 use crate::infrastructure::persistence::file_project_repository::FileProjectRepository;
 use crate::infrastructure::persistence::file_project_runtime_repository::FileProjectRuntimeRepository;
 use crate::infrastructure::process::local_project_php_process_manager::LocalProjectPhpProcessManager;
 use crate::infrastructure::runtimes::package_manager_php_installer::PackageManagerPhpInstaller;
 use crate::infrastructure::runtimes::php_binary_detector::PhpBinaryDetector;
+use crate::infrastructure::secure_storage::keychain_storage::KeychainStorage;
 use crate::infrastructure::services::local_service_manager::LocalServiceManager;
+use crate::ports::database_provisioner::DatabaseProvisioner;
+use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
 use crate::ports::log_reader::LogReader;
 use crate::ports::php_runtime_detector::PhpRuntimeDetector;
 use crate::ports::php_runtime_installer::PhpRuntimeInstaller;
 use crate::ports::project_php_process_manager::ProjectPhpProcessManager;
 use crate::ports::project_repository::ProjectRepository;
 use crate::ports::project_runtime_repository::ProjectRuntimeRepository;
+use crate::ports::secure_storage::SecureStorage;
 use crate::ports::service_manager::ServiceManager;
 use crate::shared::result::app_result::AppResult;
 
 #[derive(Clone)]
 pub struct AppState {
     pub app_name: &'static str,
+    database_provisioner: Arc<dyn DatabaseProvisioner>,
+    database_provisioning_repository: Arc<dyn DatabaseProvisioningRepository>,
     log_reader: Arc<dyn LogReader>,
     php_runtime_detector: Arc<dyn PhpRuntimeDetector>,
     php_runtime_installer: Arc<dyn PhpRuntimeInstaller>,
@@ -35,9 +43,16 @@ impl AppState {
             Arc::new(FileProjectRuntimeRepository::new()?) as Arc<dyn ProjectRuntimeRepository>;
         let project_repository =
             Arc::new(FileProjectRepository::new()?) as Arc<dyn ProjectRepository>;
+        let secure_storage = Arc::new(KeychainStorage::new()) as Arc<dyn SecureStorage>;
+        let database_provisioner = Arc::new(LocalDatabaseProvisioner::new(secure_storage)?)
+            as Arc<dyn DatabaseProvisioner>;
+        let database_provisioning_repository = Arc::new(FileDatabaseProvisioningRepository::new()?)
+            as Arc<dyn DatabaseProvisioningRepository>;
 
         Ok(Self {
             app_name: "AxiomPHP",
+            database_provisioner,
+            database_provisioning_repository,
             log_reader: Arc::new(FileLogReader::new()?),
             php_runtime_detector: Arc::new(PhpBinaryDetector::new()),
             php_runtime_installer: Arc::new(PackageManagerPhpInstaller::new()),
@@ -50,6 +65,14 @@ impl AppState {
 
     pub fn php_runtime_detector(&self) -> &dyn PhpRuntimeDetector {
         self.php_runtime_detector.as_ref()
+    }
+
+    pub fn database_provisioner(&self) -> &dyn DatabaseProvisioner {
+        self.database_provisioner.as_ref()
+    }
+
+    pub fn database_provisioning_repository(&self) -> &dyn DatabaseProvisioningRepository {
+        self.database_provisioning_repository.as_ref()
     }
 
     pub fn log_reader(&self) -> &dyn LogReader {

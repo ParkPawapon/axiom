@@ -1,4 +1,6 @@
 pub mod certificate_manager;
+pub mod database_provisioner;
+pub mod database_provisioning_repository;
 pub mod docker_client;
 pub mod file_system;
 pub mod log_reader;

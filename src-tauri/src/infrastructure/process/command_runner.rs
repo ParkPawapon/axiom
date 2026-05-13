@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -55,7 +56,14 @@ impl ProcessManager for CommandRunner {
 
         let mut command = Command::new(&process_command.program);
         command.args(&process_command.args);
-        command.stdin(Stdio::null());
+        if let Some(stdin_file) = &process_command.stdin_file {
+            let file = File::open(stdin_file).map_err(|error| {
+                AppError::Infrastructure(format!("failed to open process stdin file: {error}"))
+            })?;
+            command.stdin(Stdio::from(file));
+        } else {
+            command.stdin(Stdio::null());
+        }
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.env_clear();
