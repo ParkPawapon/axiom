@@ -8,7 +8,6 @@ import { PageShell } from "../../../shared/components/layout/page-shell";
 import { Button } from "../../../shared/components/ui/button";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import {
-  createProject,
   deleteProject,
   getProjectPhpProcessStatus,
   getProjectPhpVersion,
@@ -23,10 +22,10 @@ import {
   stopProjectPhpProcesses,
   updateProject,
 } from "../api/project.commands";
-import { ProjectFormShell } from "../components/project-form-shell";
 import { ProjectList } from "../components/project-list";
 import { ProjectPhpProcessPanel } from "../components/project-php-process-panel";
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
+import { ProjectSetupWizard } from "../components/project-setup-wizard";
 import type {
   PhpRuntimeInstallProvider,
   Project,
@@ -150,25 +149,6 @@ export function ProjectsPage() {
 
   const selectedOption = config?.availablePhpVersions.find(
     (version) => version.version === draftVersion,
-  );
-
-  const handleCreateProject = useCallback(
-    async (draft: ProjectDraft) => {
-      setIsProjectBusy(true);
-      setErrorMessage(undefined);
-      setNoticeMessage(undefined);
-
-      try {
-        const project = await createProject(draft.name, draft.documentRoot);
-        await loadProjects(project.id);
-        setNoticeMessage(`${project.name} was added.`);
-      } catch (error) {
-        setErrorMessage(getErrorMessage(error));
-      } finally {
-        setIsProjectBusy(false);
-      }
-    },
-    [loadProjects],
   );
 
   const handleUpdateProject = useCallback(
@@ -456,7 +436,7 @@ export function ProjectsPage() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
         <div className="grid content-start gap-5">
-          <ProjectFormShell isBusy={isProjectBusy} onCreate={handleCreateProject} />
+          <ProjectSetupWizard onProjectReady={loadProjects} />
 
           {isProjectsLoading ? <LoadingState label="Loading projects" /> : null}
           {!isProjectsLoading && projects.length === 0 ? (
