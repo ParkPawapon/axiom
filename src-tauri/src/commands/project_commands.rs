@@ -7,7 +7,10 @@ use crate::application::projects::get_project_php_version_use_case;
 use crate::application::projects::get_project_use_case;
 use crate::application::projects::install_project_php_runtime_use_case;
 use crate::application::projects::list_projects_use_case;
+use crate::application::projects::project_php_process_batch_use_case;
+use crate::application::projects::project_php_process_batch_use_case::ProjectPhpProcessActionResult;
 use crate::application::projects::request_project_php_install_use_case;
+use crate::application::projects::restart_project_php_process_use_case;
 use crate::application::projects::select_project_php_version_use_case;
 use crate::application::projects::start_project_php_process_use_case;
 use crate::application::projects::stop_project_php_process_use_case;
@@ -198,6 +201,24 @@ pub fn start_project_php_process(
 }
 
 #[tauri::command]
+pub fn start_project_php_processes(
+    state: State<'_, AppState>,
+    project_ids: Vec<String>,
+) -> Result<Vec<ProjectPhpProcessActionResult>, CommandErrorPayload> {
+    project_php_process_batch_use_case::start_project_php_processes(
+        state.project_repository(),
+        state.project_runtime_repository(),
+        state.php_runtime_detector(),
+        state.project_php_process_manager(),
+        &project_ids,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project PHP process batch start command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
 pub fn stop_project_php_process(
     state: State<'_, AppState>,
     project_id: String,
@@ -208,6 +229,57 @@ pub fn stop_project_php_process(
     )
     .map_err(|error| {
         tracing::warn!(?error, "project PHP process stop command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn stop_project_php_processes(
+    state: State<'_, AppState>,
+    project_ids: Vec<String>,
+) -> Result<Vec<ProjectPhpProcessActionResult>, CommandErrorPayload> {
+    project_php_process_batch_use_case::stop_project_php_processes(
+        state.project_php_process_manager(),
+        &project_ids,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project PHP process batch stop command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn restart_project_php_process(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectPhpProcessStatus, CommandErrorPayload> {
+    restart_project_php_process_use_case::restart_project_php_process(
+        state.project_repository(),
+        state.project_runtime_repository(),
+        state.php_runtime_detector(),
+        state.project_php_process_manager(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project PHP process restart command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn restart_project_php_processes(
+    state: State<'_, AppState>,
+    project_ids: Vec<String>,
+) -> Result<Vec<ProjectPhpProcessActionResult>, CommandErrorPayload> {
+    project_php_process_batch_use_case::restart_project_php_processes(
+        state.project_repository(),
+        state.project_runtime_repository(),
+        state.php_runtime_detector(),
+        state.project_php_process_manager(),
+        &project_ids,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project PHP process batch restart command failed");
         map_command_error(&error)
     })
 }

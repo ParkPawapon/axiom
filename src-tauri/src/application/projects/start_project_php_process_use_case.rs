@@ -17,6 +17,22 @@ pub fn start_project_php_process(
     process_manager: &dyn ProjectPhpProcessManager,
     project_id: &str,
 ) -> AppResult<ProjectPhpProcessStatus> {
+    let request = build_start_project_php_process_request(
+        project_repository,
+        runtime_repository,
+        detector,
+        project_id,
+    )?;
+
+    process_manager.start_php_process(request)
+}
+
+pub fn build_start_project_php_process_request(
+    project_repository: &dyn ProjectRepository,
+    runtime_repository: &dyn ProjectRuntimeRepository,
+    detector: &dyn PhpRuntimeDetector,
+    project_id: &str,
+) -> AppResult<StartProjectPhpProcessRequest> {
     let project_id = ProjectId(validate_project_id(project_id)?.to_string());
     let project = project_repository
         .get_project(&project_id)?
@@ -37,7 +53,7 @@ pub fn start_project_php_process(
             ))
         })?;
 
-    process_manager.start_php_process(StartProjectPhpProcessRequest {
+    Ok(StartProjectPhpProcessRequest {
         project_id,
         document_root: project.document_root,
         php_version: selection.php_version,

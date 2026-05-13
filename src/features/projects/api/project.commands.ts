@@ -3,6 +3,7 @@ import type {
   Project,
   ProjectPhpInstallPlan,
   ProjectPhpInstallResult,
+  ProjectPhpProcessActionResult,
   ProjectPhpProcessStatus,
   ProjectPhpVersionConfig,
 } from "../types/project.types";
@@ -68,6 +69,28 @@ export function startProjectPhpProcess(projectId: string) {
   return invokeTauriCommand<ProjectPhpProcessStatus>("start_project_php_process", { projectId });
 }
 
+export function startProjectPhpProcesses(projectIds: string[]) {
+  return invokeTauriCommand<ProjectPhpProcessActionResult[]>("start_project_php_processes", {
+    projectIds,
+  });
+}
+
 export function stopProjectPhpProcess(projectId: string) {
   return invokeTauriCommand<ProjectPhpProcessStatus>("stop_project_php_process", { projectId });
+}
+
+export function stopProjectPhpProcesses(projectIds: string[]) {
+  return invokeTauriCommand<ProjectPhpProcessActionResult[]>("stop_project_php_processes", {
+    projectIds,
+  });
+}
+
+export function restartProjectPhpProcess(projectId: string) {
+  return invokeTauriCommand<ProjectPhpProcessStatus>("restart_project_php_process", { projectId });
+}
+
+export function restartProjectPhpProcesses(projectIds: string[]) {
+  return invokeTauriCommand<ProjectPhpProcessActionResult[]>("restart_project_php_processes", {
+    projectIds,
+  });
 }

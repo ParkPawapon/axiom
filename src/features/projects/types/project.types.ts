@@ -74,3 +74,11 @@ export interface ProjectPhpProcessStatus {
   readonly startedAt?: string;
   readonly statusMessage: string;
 }
+
+export interface ProjectPhpProcessActionResult {
+  readonly projectId: string;
+  readonly succeeded: boolean;
+  readonly status?: ProjectPhpProcessStatus;
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+}

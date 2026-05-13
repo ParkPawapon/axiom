@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -33,6 +33,7 @@ const PHP_PROJECT_PROCESS_PORT_SCAN_LIMIT: u16 = 128;
 pub struct LocalProjectPhpProcessManager {
     workspace_root: PathBuf,
     registry: ProjectProcessRegistry,
+    active_operations: Mutex<BTreeSet<String>>,
     processes: Mutex<BTreeMap<String, ProjectProcessEntry>>,
 }
 
@@ -40,6 +41,11 @@ pub struct LocalProjectPhpProcessManager {
 enum ProjectProcessEntry {
     Managed(ManagedPhpProcess),
     Recovered(PersistedProjectProcessRecord),
+}
+
+struct ProjectProcessOperationGuard<'a> {
+    active_operations: &'a Mutex<BTreeSet<String>>,
+    project_id: String,
 }
 
 #[derive(Debug)]
@@ -78,6 +84,7 @@ impl LocalProjectPhpProcessManager {
         Ok(Self {
             workspace_root,
             registry,
+            active_operations: Mutex::new(BTreeSet::new()),
             processes: Mutex::new(recovered_processes),
         })
     }
@@ -97,23 +104,45 @@ impl LocalProjectPhpProcessManager {
 
         Ok(log_directory.join("php-server.log"))
     }
-}
 
-impl ProjectPhpProcessManager for LocalProjectPhpProcessManager {
-    fn start_php_process(
+    fn enter_project_operation(
         &self,
-        request: StartProjectPhpProcessRequest,
-    ) -> AppResult<ProjectPhpProcessStatus> {
-        let mut processes = self
-            .processes
+        project_id: &ProjectId,
+    ) -> AppResult<ProjectProcessOperationGuard<'_>> {
+        let mut active_operations = self
+            .active_operations
             .lock()
             .map_err(|_error| AppError::Unexpected)?;
 
-        if let Some(status) =
-            status_for_existing_process(&self.registry, &mut processes, &request.project_id)?
+        if !active_operations.insert(project_id.0.clone()) {
+            return Err(AppError::Validation(format!(
+                "project process action is already running for `{}`",
+                project_id.0
+            )));
+        }
+
+        Ok(ProjectProcessOperationGuard {
+            active_operations: &self.active_operations,
+            project_id: project_id.0.clone(),
+        })
+    }
+
+    fn start_php_process_inner(
+        &self,
+        request: StartProjectPhpProcessRequest,
+    ) -> AppResult<ProjectPhpProcessStatus> {
         {
-            if status.state == ProjectPhpProcessState::Running {
-                return Ok(status);
+            let mut processes = self
+                .processes
+                .lock()
+                .map_err(|_error| AppError::Unexpected)?;
+
+            if let Some(status) =
+                status_for_existing_process(&self.registry, &mut processes, &request.project_id)?
+            {
+                if status.state == ProjectPhpProcessState::Running {
+                    return Ok(status);
+                }
             }
         }
 
@@ -191,35 +220,49 @@ impl ProjectPhpProcessManager for LocalProjectPhpProcessManager {
             return Err(error);
         }
 
+        let mut processes = self
+            .processes
+            .lock()
+            .map_err(|_error| AppError::Unexpected)?;
         processes.insert(request.project_id.0, ProjectProcessEntry::Managed(process));
 
         Ok(status)
     }
 
-    fn stop_php_process(&self, project_id: &ProjectId) -> AppResult<ProjectPhpProcessStatus> {
-        let mut processes = self
-            .processes
-            .lock()
-            .map_err(|_error| AppError::Unexpected)?;
-        let Some(process_entry) = processes.remove(&project_id.0) else {
+    fn stop_php_process_inner(&self, project_id: &ProjectId) -> AppResult<ProjectPhpProcessStatus> {
+        let process_entry = {
+            let mut processes = self
+                .processes
+                .lock()
+                .map_err(|_error| AppError::Unexpected)?;
+            processes.remove(&project_id.0)
+        };
+
+        let Some(mut process_entry) = process_entry else {
             self.registry.remove(project_id)?;
             return Ok(ProjectPhpProcessStatus::stopped(project_id.clone()));
         };
 
-        match process_entry {
-            ProjectProcessEntry::Managed(mut process) => {
-                process.child.kill().map_err(|error| {
+        let stop_result = match &mut process_entry {
+            ProjectProcessEntry::Managed(process) => process
+                .child
+                .kill()
+                .and_then(|()| process.child.wait())
+                .map(|_status| ())
+                .map_err(|error| {
                     AppError::Infrastructure(format!("failed to stop PHP project process: {error}"))
-                })?;
-                process.child.wait().map_err(|error| {
-                    AppError::Infrastructure(format!(
-                        "failed to wait for PHP project process: {error}"
-                    ))
-                })?;
-            }
-            ProjectProcessEntry::Recovered(record) => {
-                stop_recovered_process(&record)?;
-            }
+                }),
+            ProjectProcessEntry::Recovered(record) => stop_recovered_process(record),
+        };
+
+        if let Err(error) = stop_result {
+            let mut processes = self
+                .processes
+                .lock()
+                .map_err(|_error| AppError::Unexpected)?;
+            processes.insert(project_id.0.clone(), process_entry);
+
+            return Err(error);
         }
 
         self.registry.remove(project_id)?;
@@ -230,6 +273,41 @@ impl ProjectPhpProcessManager for LocalProjectPhpProcessManager {
             status_message: "PHP project process stopped.".to_string(),
             ..ProjectPhpProcessStatus::stopped(project_id.clone())
         })
+    }
+}
+
+impl Drop for ProjectProcessOperationGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active_operations) = self.active_operations.lock() {
+            active_operations.remove(&self.project_id);
+        }
+    }
+}
+
+impl ProjectPhpProcessManager for LocalProjectPhpProcessManager {
+    fn start_php_process(
+        &self,
+        request: StartProjectPhpProcessRequest,
+    ) -> AppResult<ProjectPhpProcessStatus> {
+        let _guard = self.enter_project_operation(&request.project_id)?;
+
+        self.start_php_process_inner(request)
+    }
+
+    fn stop_php_process(&self, project_id: &ProjectId) -> AppResult<ProjectPhpProcessStatus> {
+        let _guard = self.enter_project_operation(project_id)?;
+
+        self.stop_php_process_inner(project_id)
+    }
+
+    fn restart_php_process(
+        &self,
+        request: StartProjectPhpProcessRequest,
+    ) -> AppResult<ProjectPhpProcessStatus> {
+        let _guard = self.enter_project_operation(&request.project_id)?;
+
+        self.stop_php_process_inner(&request.project_id)?;
+        self.start_php_process_inner(request)
     }
 
     fn get_php_process_status(&self, project_id: &ProjectId) -> AppResult<ProjectPhpProcessStatus> {
@@ -653,6 +731,24 @@ mod tests {
         let result = manager.resolve_document_root(&ProjectPath(
             runtime_dir.join("missing").to_string_lossy().into_owned(),
         ));
+
+        assert!(matches!(result, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn rejects_concurrent_operations_for_same_project() {
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "axiomphp-project-operation-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manager = LocalProjectPhpProcessManager::with_workspace_root(runtime_dir.clone())
+            .expect("manager should initialize");
+        let project_id = ProjectId("current-project".to_string());
+        let _guard = manager
+            .enter_project_operation(&project_id)
+            .expect("first operation should enter");
+
+        let result = manager.enter_project_operation(&project_id);
 
         assert!(matches!(result, Err(AppError::Validation(_))));
     }

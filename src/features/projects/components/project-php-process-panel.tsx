@@ -6,6 +6,7 @@ interface ProjectPhpProcessPanelProps {
   isBusy: boolean;
   status?: ProjectPhpProcessStatus;
   onRefresh: () => void;
+  onRestart: () => void;
   onStart: () => void;
   onStop: () => void;
 }
@@ -26,6 +27,7 @@ export function ProjectPhpProcessPanel({
   canStart,
   isBusy,
   onRefresh,
+  onRestart,
   onStart,
   onStop,
   status,
@@ -69,6 +71,9 @@ export function ProjectPhpProcessPanel({
         </Button>
         <Button disabled={!isRunning || isBusy} onClick={onStop} variant="secondary">
           {isBusy && isRunning ? "Stopping" : "Stop"}
+        </Button>
+        <Button disabled={!canStart || isBusy} onClick={onRestart} variant="secondary">
+          {isBusy ? "Restarting" : "Restart"}
         </Button>
         <Button disabled={isBusy} onClick={onRefresh} variant="ghost">
           Refresh

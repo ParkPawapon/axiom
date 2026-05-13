@@ -4,6 +4,7 @@ import { ErrorPanel } from "../../../shared/components/feedback/error-panel";
 import { LoadingState } from "../../../shared/components/feedback/loading-state";
 import { WarningPanel } from "../../../shared/components/feedback/warning-panel";
 import { PageShell } from "../../../shared/components/layout/page-shell";
+import { Button } from "../../../shared/components/ui/button";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import {
   createProject,
@@ -12,9 +13,13 @@ import {
   getProjectPhpVersion,
   installProjectPhpRuntime,
   listProjects,
+  restartProjectPhpProcess,
+  restartProjectPhpProcesses,
   selectProjectPhpVersion,
   startProjectPhpProcess,
+  startProjectPhpProcesses,
   stopProjectPhpProcess,
+  stopProjectPhpProcesses,
   updateProject,
 } from "../api/project.commands";
 import { ProjectFormShell } from "../components/project-form-shell";
@@ -25,6 +30,7 @@ import type {
   PhpRuntimeInstallProvider,
   Project,
   ProjectDraft,
+  ProjectPhpProcessActionResult,
   ProjectPhpProcessStatus,
   ProjectPhpVersionConfig,
 } from "../types/project.types";
@@ -59,6 +65,7 @@ export function ProjectsPage() {
   const [noticeMessage, setNoticeMessage] = useState<string>();
   const [processStatus, setProcessStatus] = useState<ProjectPhpProcessStatus>();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedActionProjectIds, setSelectedActionProjectIds] = useState<string[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
 
   const selectedProject = useMemo(
@@ -74,6 +81,11 @@ export function ProjectsPage() {
       try {
         const nextProjects = await listProjects();
         setProjects(nextProjects);
+        setSelectedActionProjectIds((currentIds) =>
+          currentIds.filter((projectId) =>
+            nextProjects.some((project) => project.id === projectId),
+          ),
+        );
         setSelectedProjectId((currentProjectId) => {
           const nextSelectedProjectId =
             preferredProjectId ?? currentProjectId ?? nextProjects[0]?.id;
@@ -135,6 +147,11 @@ export function ProjectsPage() {
     void loadConfig(selectedProjectId);
     void loadProcessStatus(selectedProjectId);
   }, [loadConfig, loadProcessStatus, selectedProjectId]);
+
+  const selectedActionProjects = useMemo(
+    () => projects.filter((project) => selectedActionProjectIds.includes(project.id)),
+    [projects, selectedActionProjectIds],
+  );
 
   const selectedOption = config?.availablePhpVersions.find(
     (version) => version.version === draftVersion,
@@ -263,6 +280,40 @@ export function ProjectsPage() {
     }
   }, [draftVersion, selectedProjectId]);
 
+  const handleToggleActionSelection = useCallback((projectId: string) => {
+    setSelectedActionProjectIds((currentIds) =>
+      currentIds.includes(projectId)
+        ? currentIds.filter((currentId) => currentId !== projectId)
+        : [...currentIds, projectId],
+    );
+  }, []);
+
+  const summarizeBatchResults = useCallback(
+    (actionLabel: string, results: ProjectPhpProcessActionResult[]) => {
+      const succeededCount = results.filter((result) => result.succeeded).length;
+      const failedResults = results.filter((result) => !result.succeeded);
+
+      setNoticeMessage(
+        `${actionLabel} completed for ${succeededCount}/${results.length} selected projects.`,
+      );
+
+      if (failedResults.length > 0) {
+        setErrorMessage(
+          failedResults
+            .map((result) => {
+              const projectName =
+                projects.find((project) => project.id === result.projectId)?.name ??
+                result.projectId;
+
+              return `${projectName}: ${result.errorMessage ?? "Process action failed."}`;
+            })
+            .join(" "),
+        );
+      }
+    },
+    [projects],
+  );
+
   const handleStartProcess = useCallback(async () => {
     if (!selectedProjectId) {
       return;
@@ -317,6 +368,90 @@ export function ProjectsPage() {
     }
   }, [loadProcessStatus, selectedProjectId]);
 
+  const handleRestartProcess = useCallback(async () => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    const shouldRestart = window.confirm(
+      [
+        "Restart the selected PHP project process?",
+        "AxiomPHP will stop the selected project process if it is running, then start it again with its persisted PHP binary and document root.",
+        "No shell command is built by the frontend. Continue?",
+      ].join("\n\n"),
+    );
+
+    if (!shouldRestart) {
+      return;
+    }
+
+    setIsProcessBusy(true);
+    setErrorMessage(undefined);
+    setNoticeMessage(undefined);
+
+    try {
+      const status = await restartProjectPhpProcess(selectedProjectId);
+      setProcessStatus(status);
+      setNoticeMessage(status.statusMessage);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+      await loadProcessStatus(selectedProjectId);
+    } finally {
+      setIsProcessBusy(false);
+    }
+  }, [loadProcessStatus, selectedProjectId]);
+
+  const handleBatchProcessAction = useCallback(
+    async (action: "start" | "stop" | "restart") => {
+      if (selectedActionProjectIds.length === 0) {
+        return;
+      }
+
+      const actionLabel =
+        action === "start" ? "Start" : action === "stop" ? "Stop" : "Restart";
+      const shouldRun = window.confirm(
+        [
+          `${actionLabel} PHP project processes for ${selectedActionProjectIds.length} selected projects?`,
+          "AxiomPHP runs each project action through the Rust backend. Each project is isolated and same-project actions are guarded.",
+          "No shell command is built by the frontend. Continue?",
+        ].join("\n\n"),
+      );
+
+      if (!shouldRun) {
+        return;
+      }
+
+      setIsProcessBusy(true);
+      setErrorMessage(undefined);
+      setNoticeMessage(undefined);
+
+      try {
+        const results =
+          action === "start"
+            ? await startProjectPhpProcesses(selectedActionProjectIds)
+            : action === "stop"
+              ? await stopProjectPhpProcesses(selectedActionProjectIds)
+              : await restartProjectPhpProcesses(selectedActionProjectIds);
+
+        summarizeBatchResults(actionLabel, results);
+
+        if (selectedProjectId) {
+          await loadProcessStatus(selectedProjectId);
+        }
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsProcessBusy(false);
+      }
+    },
+    [
+      loadProcessStatus,
+      selectedActionProjectIds,
+      selectedProjectId,
+      summarizeBatchResults,
+    ],
+  );
+
   return (
     <PageShell
       title="Projects"
@@ -341,8 +476,10 @@ export function ProjectsPage() {
               activeProjectId={selectedProjectId}
               isBusy={isProjectBusy}
               projects={projects}
+              selectedActionProjectIds={selectedActionProjectIds}
               onDelete={handleDeleteProject}
               onSelect={setSelectedProjectId}
+              onToggleActionSelection={handleToggleActionSelection}
               onUpdate={handleUpdateProject}
             />
           ) : null}
@@ -363,6 +500,41 @@ export function ProjectsPage() {
             </section>
           ) : null}
 
+          {projects.length > 0 ? (
+            <section className="border-2 border-voicebox-black bg-white p-5">
+              <div className="border-b border-voicebox-border pb-4">
+                <p className="font-mono text-xs uppercase text-voicebox-secondary">
+                  Multi-project Processes
+                </p>
+                <h2 className="mt-1 font-display text-2xl uppercase leading-none text-voicebox-black">
+                  {selectedActionProjects.length} Selected
+                </h2>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <Button
+                  disabled={selectedActionProjectIds.length === 0 || isProcessBusy}
+                  onClick={() => void handleBatchProcessAction("start")}
+                >
+                  Start Selected
+                </Button>
+                <Button
+                  disabled={selectedActionProjectIds.length === 0 || isProcessBusy}
+                  onClick={() => void handleBatchProcessAction("stop")}
+                  variant="secondary"
+                >
+                  Stop Selected
+                </Button>
+                <Button
+                  disabled={selectedActionProjectIds.length === 0 || isProcessBusy}
+                  onClick={() => void handleBatchProcessAction("restart")}
+                  variant="secondary"
+                >
+                  Restart Selected
+                </Button>
+              </div>
+            </section>
+          ) : null}
+
           {isRuntimeLoading ? <LoadingState label="Loading project runtime preference" /> : null}
           {!isRuntimeLoading && selectedProject && config ? (
             <>
@@ -380,6 +552,7 @@ export function ProjectsPage() {
                 isBusy={isProcessBusy}
                 status={processStatus}
                 onRefresh={() => void loadProcessStatus(selectedProject.id)}
+                onRestart={handleRestartProcess}
                 onStart={handleStartProcess}
                 onStop={handleStopProcess}
               />
