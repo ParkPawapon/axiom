@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 
 use crate::domain::project::project_id::ProjectId;
+use crate::domain::project::project_path::ProjectPath;
 use crate::domain::project::project_process::{ProjectPhpProcessState, ProjectPhpProcessStatus};
 use crate::domain::runtime::runtime_version::RuntimeVersion;
 use crate::domain::security::command_policy::{CommandPolicy, ProcessCommand};
@@ -19,6 +20,7 @@ use crate::ports::project_php_process_manager::{
 };
 use crate::shared::error::app_error::AppError;
 use crate::shared::result::app_result::AppResult;
+use crate::shared::validation::validate_path::validate_existing_directory_path;
 use crate::shared::validation::validate_port::validate_port;
 
 const PHP_PROJECT_PROCESS_STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -58,20 +60,20 @@ impl LocalProjectPhpProcessManager {
         }
     }
 
-    fn prepare_document_root(&self, project_id: &ProjectId) -> AppResult<PathBuf> {
-        let document_root = self.workspace_root.join(&project_id.0).join("public");
-
-        fs::create_dir_all(&document_root).map_err(|error| {
-            AppError::Infrastructure(format!("failed to create project document root: {error}"))
-        })?;
-
-        Ok(document_root)
+    fn resolve_document_root(&self, document_root: &ProjectPath) -> AppResult<PathBuf> {
+        validate_existing_directory_path(&document_root.0)
     }
 
-    fn log_file_path(&self, project_id: &ProjectId) -> PathBuf {
-        self.workspace_root
-            .join(&project_id.0)
-            .join("php-server.log")
+    fn prepare_log_file_path(&self, project_id: &ProjectId) -> AppResult<PathBuf> {
+        let log_directory = self.workspace_root.join(&project_id.0);
+
+        fs::create_dir_all(&log_directory).map_err(|error| {
+            AppError::Infrastructure(format!(
+                "failed to create PHP process log directory: {error}"
+            ))
+        })?;
+
+        Ok(log_directory.join("php-server.log"))
     }
 }
 
@@ -91,8 +93,8 @@ impl ProjectPhpProcessManager for LocalProjectPhpProcessManager {
             }
         }
 
-        let document_root = self.prepare_document_root(&request.project_id)?;
-        let log_file = self.log_file_path(&request.project_id);
+        let document_root = self.resolve_document_root(&request.document_root)?;
+        let log_file = self.prepare_log_file_path(&request.project_id)?;
         let port = find_available_loopback_port(preferred_project_port(&request.project_id)?)?;
         let bind_address = format!("127.0.0.1:{port}");
         let php_binary_path = PathBuf::from(&request.php_binary.path.0);
@@ -363,5 +365,46 @@ mod tests {
         assert_eq!(status.state, ProjectPhpProcessState::Stopped);
         assert!(status.pid.is_none());
         assert!(status.url.is_none());
+    }
+
+    #[test]
+    fn resolves_real_project_document_root_without_creating_placeholder() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "axiomphp-real-document-root-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let runtime_dir = base_dir.join("runtime");
+        let document_root = base_dir.join("project").join("public");
+        fs::create_dir_all(&document_root).expect("document root should be created");
+
+        let manager = LocalProjectPhpProcessManager::with_workspace_root(runtime_dir.clone());
+        let resolved = manager
+            .resolve_document_root(&ProjectPath(document_root.to_string_lossy().into_owned()))
+            .expect("document root should resolve");
+
+        assert_eq!(
+            resolved,
+            document_root
+                .canonicalize()
+                .expect("document root should canonicalize")
+        );
+        assert!(!runtime_dir.join("current-project").join("public").exists());
+
+        fs::remove_dir_all(base_dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn rejects_missing_project_document_root() {
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "axiomphp-missing-document-root-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manager = LocalProjectPhpProcessManager::with_workspace_root(runtime_dir.clone());
+
+        let result = manager.resolve_document_root(&ProjectPath(
+            runtime_dir.join("missing").to_string_lossy().into_owned(),
+        ));
+
+        assert!(matches!(result, Err(AppError::Validation(_))));
     }
 }

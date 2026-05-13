@@ -55,7 +55,7 @@ export function ProjectPhpProcessPanel({
         <ProcessDetail label="PID" value={status?.pid ? String(status.pid) : "None"} />
         <ProcessDetail label="PHP" value={status?.phpVersion ?? "No active process"} />
         <ProcessDetail label="Port" value={status?.port ? String(status.port) : "None"} />
-        <ProcessDetail label="Document root" value={status?.documentRoot ?? "Managed by backend"} />
+        <ProcessDetail label="Document root" value={status?.documentRoot ?? "No active process"} />
         <ProcessDetail label="Log file" value={status?.logFile ?? "Created on start"} />
       </div>
 
