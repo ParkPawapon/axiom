@@ -1,4 +1,6 @@
-use crate::domain::project::project_php_version::PhpRuntimeInstallProvider;
+use crate::domain::project::project_php_version::{
+    PhpRuntimeInstallDiagnostic, PhpRuntimeInstallProvider, PhpRuntimeInstallRollback,
+};
 use crate::domain::runtime::runtime_version::RuntimeVersion;
 use crate::shared::result::app_result::AppResult;
 
@@ -6,6 +8,8 @@ use crate::shared::result::app_result::AppResult;
 pub struct PhpRuntimeInstallReport {
     pub provider: PhpRuntimeInstallProvider,
     pub package_name: String,
+    pub diagnostics: Vec<PhpRuntimeInstallDiagnostic>,
+    pub rollback: Option<PhpRuntimeInstallRollback>,
     pub status_message: String,
 }
 
