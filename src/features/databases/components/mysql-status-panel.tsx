@@ -3,9 +3,8 @@ import { StatusPanel } from "../../../shared/components/feedback/status-panel";
 export function MysqlStatusPanel() {
   return (
     <StatusPanel title="MySQL Boundary" tone="warning">
-      MySQL configuration and storage lifecycle are intentionally still backend-gated. The frontend
-      only displays service inventory until credential, data directory, and process isolation rules
-      are implemented.
+      MySQL lifecycle uses a backend allowlist for Homebrew launchd labels on macOS and known
+      Windows service names. Credentials and data directory provisioning remain separate.
     </StatusPanel>
   );
 }

@@ -6,6 +6,7 @@ const labels: Record<ServiceStatus, string> = {
   notConfigured: "Not configured",
   running: "Running",
   stopped: "Stopped",
+  unknown: "Unknown",
 };
 
 export function formatServiceStatus(status: ServiceStatus) {

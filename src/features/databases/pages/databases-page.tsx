@@ -46,7 +46,7 @@ export function DatabasesPage() {
   return (
     <PageShell
       title="Databases"
-      description="Read-only database service visibility. Runtime control stays behind the Services boundary until database adapters are production-ready."
+      description="Database service visibility backed by the same lifecycle adapters used by the Services control surface."
     >
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
       {isLoading ? <LoadingState label="Loading database service inventory" /> : null}
@@ -67,7 +67,7 @@ export function DatabasesPage() {
       {!isLoading && databaseServices.length === 0 ? (
         <EmptyState
           title="No database services registered"
-          description="MySQL and PostgreSQL adapters are not configured in the backend service inventory yet."
+          description="MySQL and PostgreSQL adapters are unavailable from the backend service inventory."
         />
       ) : null}
     </PageShell>

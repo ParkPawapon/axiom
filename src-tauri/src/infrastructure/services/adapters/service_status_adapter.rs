@@ -10,6 +10,26 @@ pub struct ServiceProbeResult {
 }
 
 impl ServiceProbeResult {
+    pub fn running(message: impl Into<String>) -> Self {
+        Self {
+            status: ServiceStatus::Running,
+            status_message: message.into(),
+            can_start: false,
+            can_stop: true,
+            can_restart: true,
+        }
+    }
+
+    pub fn stopped(message: impl Into<String>) -> Self {
+        Self {
+            status: ServiceStatus::Stopped,
+            status_message: message.into(),
+            can_start: true,
+            can_stop: false,
+            can_restart: true,
+        }
+    }
+
     pub fn detected(message: impl Into<String>) -> Self {
         Self {
             status: ServiceStatus::Detected,

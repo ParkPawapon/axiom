@@ -20,6 +20,7 @@ const statusTone: Record<ManagedService["status"], StatusTone> = {
   notConfigured: "warning",
   running: "success",
   stopped: "neutral",
+  unknown: "neutral",
 };
 
 export function ServiceStatusRow({
