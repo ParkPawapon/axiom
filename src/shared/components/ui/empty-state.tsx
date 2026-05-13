@@ -1,13 +1,13 @@
 interface EmptyStateProps {
   title: string;
-  description: string;
+  description?: string;
 }
 
-export function EmptyState({ title, description }: EmptyStateProps) {
+export function EmptyState({ description, title }: EmptyStateProps) {
   return (
-    <div className="border border-voicebox-border bg-voicebox-surface p-6">
-      <h2 className="font-display text-xl uppercase text-voicebox-black">{title}</h2>
-      <p className="mt-2 max-w-2xl text-sm text-voicebox-secondary">{description}</p>
-    </div>
+    <section className="border border-voicebox-border bg-white p-5">
+      <h2 className="font-display text-2xl uppercase leading-none text-voicebox-black">{title}</h2>
+      {description ? <p className="mt-3 text-sm text-voicebox-secondary">{description}</p> : null}
+    </section>
   );
 }

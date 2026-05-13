@@ -1,5 +1,4 @@
 export interface CommandError {
-  code: string;
-  message: string;
-  safeDetails?: string;
+  readonly code: string;
+  readonly message: string;
 }

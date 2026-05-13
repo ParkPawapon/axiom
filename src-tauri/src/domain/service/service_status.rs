@@ -2,8 +2,9 @@
 #[serde(rename_all = "camelCase")]
 pub enum ServiceStatus {
     Detected,
-    NotConfigured,
-    Stopped,
-    Running,
     Failed,
+    NotConfigured,
+    Running,
+    Stopped,
+    Unknown,
 }

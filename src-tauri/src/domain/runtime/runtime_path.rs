@@ -1,3 +1,3 @@
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimePath(pub String);

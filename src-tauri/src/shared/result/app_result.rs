@@ -1,3 +1,1 @@
-use crate::shared::error::app_error::AppError;
-
-pub type AppResult<T> = Result<T, AppError>;
+pub type AppResult<T> = Result<T, crate::shared::error::app_error::AppError>;

@@ -1,1 +1,1 @@
-// Future filesystem adapter.
+pub struct LocalFileSystem;

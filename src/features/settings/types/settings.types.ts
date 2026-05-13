@@ -1,1 +1,1 @@
-export type SettingsScope = "application" | "security" | "runtime";
+export {};

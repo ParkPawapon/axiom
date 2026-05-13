@@ -1,1 +1,1 @@
-// Future Windows Credential Manager secure storage adapter.
+pub struct WindowsCredentialStorage;

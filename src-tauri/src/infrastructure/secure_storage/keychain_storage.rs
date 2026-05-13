@@ -1,1 +1,1 @@
-// Future macOS Keychain secure storage adapter.
+pub struct KeychainStorage;

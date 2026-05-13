@@ -1,1 +1,1 @@
-export type DatabaseKind = "mysql" | "postgresql";
+export {};

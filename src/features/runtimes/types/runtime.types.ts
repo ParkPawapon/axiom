@@ -1,1 +1,1 @@
-export type RuntimeKind = "php";
+export {};

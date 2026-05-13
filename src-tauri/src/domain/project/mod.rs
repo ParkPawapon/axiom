@@ -4,3 +4,4 @@ pub mod project_config;
 pub mod project_id;
 pub mod project_path;
 pub mod project_php_version;
+pub mod project_process;

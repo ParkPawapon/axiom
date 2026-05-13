@@ -1,1 +1,1 @@
-// Future macOS service adapter.
+pub struct MacosServiceAdapter;

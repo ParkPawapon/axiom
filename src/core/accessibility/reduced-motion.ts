@@ -1,3 +1,3 @@
-export function prefersReducedMotion(): boolean {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+export function prefersReducedMotion() {
+  return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }

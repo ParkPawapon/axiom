@@ -1,1 +1,1 @@
-// Future Docker Compose file generation adapter.
+pub struct DockerComposeGenerator;

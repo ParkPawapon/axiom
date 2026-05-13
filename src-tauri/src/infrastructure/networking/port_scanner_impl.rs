@@ -1,1 +1,1 @@
-// Future port scanner implementation.
+pub struct PortScannerImpl;

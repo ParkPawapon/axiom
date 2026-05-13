@@ -1,8 +1,8 @@
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum LogLevel {
-    Trace,
     Debug,
+    Error,
     Info,
     Warn,
-    Error,
 }

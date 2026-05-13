@@ -1,1 +1,3 @@
-// Future shell escaping helpers. Command construction must stay structured.
+pub fn shell_escape_disabled_placeholder(value: &str) -> &str {
+    value
+}

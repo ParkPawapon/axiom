@@ -1,1 +1,1 @@
-// Future file-backed project repository adapter.
+pub struct FileProjectRepository;

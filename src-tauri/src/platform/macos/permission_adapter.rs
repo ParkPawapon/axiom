@@ -1,1 +1,1 @@
-// Future macOS permission adapter.
+pub struct MacosPermissionAdapter;

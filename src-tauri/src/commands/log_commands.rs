@@ -1,1 +1,1 @@
-// Thin Tauri log command handlers will call application use cases here.
+pub fn log_commands_placeholder() {}

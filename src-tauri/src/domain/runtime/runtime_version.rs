@@ -1,47 +1,27 @@
+use std::fmt;
+
 use crate::shared::error::app_error::AppError;
 use crate::shared::result::app_result::AppResult;
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
-pub struct RuntimeVersion(pub String);
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVersion(String);
 
 impl RuntimeVersion {
-    pub fn new(version: &str) -> AppResult<Self> {
-        let trimmed = version.trim();
+    pub fn new(value: &str) -> AppResult<Self> {
+        let value = value.trim();
 
-        if trimmed.is_empty() {
+        if !is_valid_runtime_version(value) {
             return Err(AppError::Validation(
-                "runtime version must not be empty".to_string(),
+                "runtime version must use a major.minor numeric format".to_string(),
             ));
         }
 
-        if trimmed != version {
-            return Err(AppError::Validation(
-                "runtime version must not include leading or trailing whitespace".to_string(),
-            ));
-        }
-
-        if trimmed.len() > 16 {
-            return Err(AppError::Validation(
-                "runtime version must be 16 characters or fewer".to_string(),
-            ));
-        }
-
-        let is_safe = trimmed.bytes().all(|byte| {
-            byte.is_ascii_digit() || byte == b'.' || byte.is_ascii_lowercase() || byte == b'-'
-        });
-
-        if !is_safe {
-            return Err(AppError::Validation(
-                "runtime version contains unsupported characters".to_string(),
-            ));
-        }
-
-        Ok(Self(trimmed.to_string()))
+        Ok(Self(value.to_string()))
     }
 
-    pub fn trusted(version: &'static str) -> Self {
-        Self(version.to_string())
+    pub fn trusted(value: &str) -> Self {
+        Self(value.to_string())
     }
 
     pub fn as_str(&self) -> &str {
@@ -49,13 +29,37 @@ impl RuntimeVersion {
     }
 }
 
+impl fmt::Display for RuntimeVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+fn is_valid_runtime_version(value: &str) -> bool {
+    let Some((major, minor)) = value.split_once('.') else {
+        return false;
+    };
+
+    !major.is_empty()
+        && !minor.is_empty()
+        && major.bytes().all(|byte| byte.is_ascii_digit())
+        && minor.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn rejects_runtime_versions_with_whitespace() {
-        let result = RuntimeVersion::new(" 8.5");
+    fn accepts_major_minor_versions() {
+        let version = RuntimeVersion::new("8.4").expect("version should validate");
+
+        assert_eq!(version.as_str(), "8.4");
+    }
+
+    #[test]
+    fn rejects_path_like_versions() {
+        let result = RuntimeVersion::new("../8.4");
 
         assert!(matches!(result, Err(AppError::Validation(_))));
     }

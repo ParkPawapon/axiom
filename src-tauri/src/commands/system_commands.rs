@@ -1,1 +1,1 @@
-// Thin Tauri system command handlers will call application use cases here.
+pub fn system_commands_placeholder() {}
