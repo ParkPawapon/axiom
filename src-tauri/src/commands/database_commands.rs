@@ -8,7 +8,7 @@ use crate::application::databases::restore_project_database_use_case;
 use crate::application::databases::run_project_database_migrations_use_case;
 use crate::bootstrap::app_state::AppState;
 use crate::domain::database::database_config::{
-    DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
     DatabaseProvisioningResult, DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::shared::error::command_error_mapper::{map_command_error, CommandErrorPayload};
@@ -55,12 +55,14 @@ pub fn backup_project_database(
     state: State<'_, AppState>,
     project_id: String,
     database_type: String,
+    options: Option<DatabaseBackupOptions>,
 ) -> Result<DatabaseBackupResult, CommandErrorPayload> {
     backup_project_database_use_case::backup_project_database(
         state.database_provisioning_repository(),
         state.database_provisioner(),
         &project_id,
         &database_type,
+        options,
     )
     .map_err(|error| {
         tracing::warn!(?error, "database backup command failed");

@@ -6,7 +6,7 @@ use chrono::Utc;
 use directories::ProjectDirs;
 
 use crate::domain::database::database_config::{
-    DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
     DatabaseProvisioningResult, DatabaseProvisioningStatus, DatabaseRestoreResult,
     ProjectDatabaseProfile,
 };
@@ -18,6 +18,9 @@ use crate::ports::secure_storage::SecureStorage;
 use crate::shared::error::app_error::AppError;
 use crate::shared::result::app_result::AppResult;
 
+use super::backup_artifacts::{
+    cleanup_restore_artifact, finalize_backup_artifact, prepare_restore_artifact,
+};
 use super::database_cli::{
     create_database_resources, run_mysql_backup, run_mysql_restore, run_mysql_script,
     run_postgres_backup, run_postgres_restore, run_postgres_script, ProvisioningAttemptError,
@@ -30,7 +33,6 @@ use super::database_identifiers::{
 };
 use super::database_paths::{
     backup_path, collect_migration_files, create_project_paths, validate_existing_directory,
-    validate_sql_file,
 };
 
 #[derive(Clone)]
@@ -158,6 +160,7 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
     fn backup_project_database(
         &self,
         profile: &ProjectDatabaseProfile,
+        options: DatabaseBackupOptions,
     ) -> AppResult<DatabaseBackupResult> {
         ensure_profile_ready(profile)?;
         let password = self.password_for_profile(profile)?;
@@ -167,12 +170,23 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             DatabaseType::Mysql => run_mysql_backup(profile, &password, &backup_path)?,
             DatabaseType::Postgresql => run_postgres_backup(profile, &password, &backup_path)?,
         };
+        let artifact =
+            finalize_backup_artifact(profile, self.secure_storage.as_ref(), backup_path, options)?;
 
         Ok(DatabaseBackupResult {
             project_id: profile.project_id.clone(),
             database_type: profile.database_type,
-            backup_path: backup_path.to_string_lossy().into_owned(),
-            status_message: "Database backup completed successfully.".to_string(),
+            backup_path: artifact.backup_path.to_string_lossy().into_owned(),
+            metadata_path: Some(artifact.metadata_path.to_string_lossy().into_owned()),
+            compression: options.compression,
+            encryption: options.encryption,
+            compressed: artifact.compressed,
+            encrypted: artifact.encrypted,
+            size_bytes: artifact.size_bytes,
+            pruned_backup_paths: artifact.pruned_backup_paths,
+            status_message:
+                "Database backup completed with managed retention and artifact processing."
+                    .to_string(),
         })
     }
 
@@ -182,19 +196,41 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         backup_path: &str,
     ) -> AppResult<DatabaseRestoreResult> {
         ensure_profile_ready(profile)?;
-        let sql_path = validate_sql_file(backup_path)?;
+        let restore_artifact =
+            prepare_restore_artifact(profile, self.secure_storage.as_ref(), backup_path)?;
         let password = self.password_for_profile(profile)?;
 
-        match profile.database_type {
-            DatabaseType::Mysql => run_mysql_restore(profile, &password, &sql_path)?,
-            DatabaseType::Postgresql => run_postgres_restore(profile, &password, &sql_path)?,
+        let restore_result = match profile.database_type {
+            DatabaseType::Mysql => {
+                run_mysql_restore(profile, &password, &restore_artifact.sql_path)
+            }
+            DatabaseType::Postgresql => {
+                run_postgres_restore(profile, &password, &restore_artifact.sql_path)
+            }
+        };
+
+        let restore_result = match restore_result {
+            Ok(output) => output,
+            Err(error) => {
+                cleanup_restore_artifact(&restore_artifact);
+                return Err(error);
+            }
+        };
+        cleanup_restore_artifact(&restore_artifact);
+        let status_message = if restore_result.stderr.trim().is_empty() {
+            "Database restore completed successfully.".to_string()
+        } else {
+            "Database restore completed successfully with command diagnostics.".to_string()
         };
 
         Ok(DatabaseRestoreResult {
             project_id: profile.project_id.clone(),
             database_type: profile.database_type,
-            backup_path: sql_path.to_string_lossy().into_owned(),
-            status_message: "Database restore completed successfully.".to_string(),
+            backup_path: restore_artifact.sql_path.to_string_lossy().into_owned(),
+            restored_from_path: restore_artifact.source_path.to_string_lossy().into_owned(),
+            decrypted: restore_artifact.decrypted,
+            decompressed: restore_artifact.decompressed,
+            status_message,
         })
     }
 

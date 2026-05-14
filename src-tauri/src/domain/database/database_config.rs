@@ -89,12 +89,66 @@ pub struct DatabaseProvisioningResult {
     pub status_message: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseBackupCompression {
+    Gzip,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseBackupEncryption {
+    Aes256Gcm,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupOptions {
+    pub compression: DatabaseBackupCompression,
+    pub encryption: DatabaseBackupEncryption,
+    pub retention_days: u16,
+}
+
+impl Default for DatabaseBackupOptions {
+    fn default() -> Self {
+        Self {
+            compression: DatabaseBackupCompression::Gzip,
+            encryption: DatabaseBackupEncryption::Aes256Gcm,
+            retention_days: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupMetadata {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub backup_path: String,
+    pub metadata_path: String,
+    pub compression: DatabaseBackupCompression,
+    pub encryption: DatabaseBackupEncryption,
+    pub compressed: bool,
+    pub encrypted: bool,
+    pub size_bytes: u64,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseBackupResult {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
     pub backup_path: String,
+    pub metadata_path: Option<String>,
+    pub compression: DatabaseBackupCompression,
+    pub encryption: DatabaseBackupEncryption,
+    pub compressed: bool,
+    pub encrypted: bool,
+    pub size_bytes: u64,
+    pub pruned_backup_paths: Vec<String>,
     pub status_message: String,
 }
 
@@ -104,6 +158,9 @@ pub struct DatabaseRestoreResult {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
     pub backup_path: String,
+    pub restored_from_path: String,
+    pub decrypted: bool,
+    pub decompressed: bool,
     pub status_message: String,
 }
 
