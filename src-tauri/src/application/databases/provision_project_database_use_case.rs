@@ -29,6 +29,9 @@ pub fn provision_project_database(
                 profile: existing_profile,
                 credential_stored: true,
                 database_created: false,
+                dependency_report: None,
+                phpmyadmin_access: None,
+                service_report: None,
                 status_message: "Database profile is already provisioned.".to_string(),
             });
         }

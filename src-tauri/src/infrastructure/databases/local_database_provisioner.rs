@@ -117,7 +117,10 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
                 Ok(DatabaseProvisioningResult {
                     credential_stored: true,
                     database_created: true,
+                    dependency_report: None,
+                    phpmyadmin_access: None,
                     status_message: profile.status_message.clone(),
+                    service_report: None,
                     profile,
                 })
             }
@@ -128,7 +131,10 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
                 Ok(DatabaseProvisioningResult {
                     credential_stored: true,
                     database_created: false,
+                    dependency_report: None,
+                    phpmyadmin_access: None,
                     status_message: message,
+                    service_report: None,
                     profile,
                 })
             }
@@ -139,7 +145,10 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
                 Ok(DatabaseProvisioningResult {
                     credential_stored: true,
                     database_created: false,
+                    dependency_report: None,
+                    phpmyadmin_access: None,
                     status_message: message,
+                    service_report: None,
                     profile,
                 })
             }
