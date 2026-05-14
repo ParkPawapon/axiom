@@ -1,10 +1,13 @@
+pub mod audit_logger;
 pub mod certificate_manager;
 pub mod database_dependency_manager;
 pub mod database_provisioner;
 pub mod database_provisioning_repository;
 pub mod docker_client;
 pub mod file_system;
+pub mod hosts_file_manager;
 pub mod log_reader;
+pub mod permission_manager;
 pub mod php_runtime_detector;
 pub mod php_runtime_installer;
 pub mod port_scanner;

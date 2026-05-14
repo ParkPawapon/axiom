@@ -1,3 +1,4 @@
+pub mod validate_local_domain;
 pub mod validate_path;
 pub mod validate_port;
 pub mod validate_project_id;

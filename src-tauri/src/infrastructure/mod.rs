@@ -8,4 +8,5 @@ pub mod persistence;
 pub mod process;
 pub mod runtimes;
 pub mod secure_storage;
+pub mod security;
 pub mod services;
