@@ -38,7 +38,9 @@ pub fn provision_project_database(
     provision_project_database_use_case::provision_project_database(
         state.project_repository(),
         state.database_provisioning_repository(),
+        state.database_dependency_manager(),
         state.database_provisioner(),
+        state.service_manager(),
         &project_id,
         &database_type,
     )
