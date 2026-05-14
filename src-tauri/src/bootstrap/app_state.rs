@@ -7,6 +7,7 @@ use crate::infrastructure::databases::managed_database_dependency_manager::Manag
 use crate::infrastructure::logging::file_audit_logger::FileAuditLogger;
 use crate::infrastructure::logging::file_log_reader::FileLogReader;
 use crate::infrastructure::networking::hosts_file_adapter::HostsFileAdapter;
+use crate::infrastructure::persistence::file_database_backup_policy_repository::FileDatabaseBackupPolicyRepository;
 use crate::infrastructure::persistence::file_database_provisioning_repository::FileDatabaseProvisioningRepository;
 use crate::infrastructure::persistence::file_project_repository::FileProjectRepository;
 use crate::infrastructure::persistence::file_project_runtime_repository::FileProjectRuntimeRepository;
@@ -18,6 +19,7 @@ use crate::infrastructure::security::local_permission_manager::LocalPermissionMa
 use crate::infrastructure::services::local_service_manager::LocalServiceManager;
 use crate::ports::audit_logger::AuditLogger;
 use crate::ports::certificate_manager::CertificateManager;
+use crate::ports::database_backup_policy_repository::DatabaseBackupPolicyRepository;
 use crate::ports::database_dependency_manager::DatabaseDependencyManager;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
@@ -38,6 +40,7 @@ pub struct AppState {
     pub app_name: &'static str,
     audit_logger: Arc<dyn AuditLogger>,
     certificate_manager: Arc<dyn CertificateManager>,
+    database_backup_policy_repository: Arc<dyn DatabaseBackupPolicyRepository>,
     database_dependency_manager: Arc<dyn DatabaseDependencyManager>,
     database_provisioner: Arc<dyn DatabaseProvisioner>,
     database_provisioning_repository: Arc<dyn DatabaseProvisioningRepository>,
@@ -65,11 +68,14 @@ impl AppState {
             as Arc<dyn DatabaseProvisioningRepository>;
         let database_dependency_manager =
             Arc::new(ManagedDatabaseDependencyManager::new()) as Arc<dyn DatabaseDependencyManager>;
+        let database_backup_policy_repository = Arc::new(FileDatabaseBackupPolicyRepository::new()?)
+            as Arc<dyn DatabaseBackupPolicyRepository>;
 
         Ok(Self {
             app_name: "AxiomPHP",
             audit_logger: Arc::new(FileAuditLogger::new()?),
             certificate_manager: Arc::new(LocalCertificateManager::new()?),
+            database_backup_policy_repository,
             database_dependency_manager,
             database_provisioner,
             database_provisioning_repository,
@@ -99,6 +105,10 @@ impl AppState {
 
     pub fn database_provisioner(&self) -> &dyn DatabaseProvisioner {
         self.database_provisioner.as_ref()
+    }
+
+    pub fn database_backup_policy_repository(&self) -> &dyn DatabaseBackupPolicyRepository {
+        self.database_backup_policy_repository.as_ref()
     }
 
     pub fn database_dependency_manager(&self) -> &dyn DatabaseDependencyManager {
