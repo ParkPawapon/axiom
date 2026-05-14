@@ -54,6 +54,18 @@ pub fn provision_project_database(
     let mut result = database_provisioner.provision_project_database(&project, database_type)?;
     result.dependency_report = Some(dependency_report);
     result.service_report = Some(service_report);
+    match database_dependency_manager.configure_phpmyadmin(&result.profile) {
+        Ok(access) => {
+            result.phpmyadmin_access = access;
+        }
+        Err(error) => {
+            result.status_message = format!(
+                "{} phpMyAdmin managed access is pending: {error}",
+                result.status_message
+            );
+            result.profile.status_message = result.status_message.clone();
+        }
+    }
     database_repository.save_profile(result.profile.clone())?;
 
     Ok(result)

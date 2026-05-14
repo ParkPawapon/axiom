@@ -73,6 +73,7 @@ pub struct PhpMyAdminAccess {
     pub document_root: String,
     pub config_path: String,
     pub reverse_proxy_config_path: String,
+    pub reverse_proxy_started: bool,
     pub status_message: String,
 }
 

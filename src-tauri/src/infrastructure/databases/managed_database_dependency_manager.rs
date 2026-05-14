@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use directories::ProjectDirs;
+use uuid::Uuid;
 
 use crate::domain::database::database_config::{
     ManagedDatabaseDependencyReport, ManagedDatabaseDependencyStatus, ManagedDatabasePackage,
@@ -159,32 +160,37 @@ impl DatabaseDependencyManager for ManagedDatabaseDependencyManager {
 
         let config_path = config_dir.join("config.inc.php");
         let reverse_proxy_config_path = config_dir.join("Caddyfile");
-        let url = profile
-            .admin_url
-            .clone()
-            .unwrap_or_else(|| format!("http://127.0.0.1/phpmyadmin?db={}", profile.database_name));
+        let url = profile.admin_url.clone().unwrap_or_else(|| {
+            format!(
+                "http://127.0.0.1:8088/phpmyadmin?db={}",
+                profile.database_name
+            )
+        });
+        let base_url = phpmyadmin_base_url(&url);
+        let site_address = phpmyadmin_site_address(&base_url)?;
 
         fs::write(&config_path, phpmyadmin_config(profile)).map_err(|error| {
             AppError::Infrastructure(format!("failed to write phpMyAdmin config: {error}"))
         })?;
         fs::write(
             &reverse_proxy_config_path,
-            caddy_phpmyadmin_route(&document_root),
+            caddy_phpmyadmin_route(&site_address, &document_root),
         )
         .map_err(|error| {
             AppError::Infrastructure(format!(
                 "failed to write phpMyAdmin reverse-proxy config: {error}"
             ))
         })?;
+        let reverse_proxy_started = start_phpmyadmin_reverse_proxy(&reverse_proxy_config_path)?;
 
         Ok(Some(PhpMyAdminAccess {
             url,
             document_root: document_root.to_string_lossy().into_owned(),
             config_path: config_path.to_string_lossy().into_owned(),
             reverse_proxy_config_path: reverse_proxy_config_path.to_string_lossy().into_owned(),
-            status_message:
-                "phpMyAdmin config and reverse-proxy route file were generated for the managed MySQL profile."
-                    .to_string(),
+            reverse_proxy_started,
+            status_message: "phpMyAdmin config was generated and Caddy reverse-proxy startup was requested for the managed MySQL profile."
+                .to_string(),
         }))
     }
 }
@@ -360,16 +366,144 @@ fn phpmyadmin_document_root() -> AppResult<PathBuf> {
 }
 
 fn phpmyadmin_config(profile: &ProjectDatabaseProfile) -> String {
+    let blowfish_secret = Uuid::new_v4().simple().to_string();
+
     format!(
-        "<?php\n$cfg['blowfish_secret'] = 'axiomphp-local-dev-only-secret';\n$i = 0;\n$i++;\n$cfg['Servers'][$i]['auth_type'] = 'cookie';\n$cfg['Servers'][$i]['host'] = '{}';\n$cfg['Servers'][$i]['port'] = '{}';\n$cfg['Servers'][$i]['compress'] = false;\n$cfg['Servers'][$i]['AllowNoPassword'] = false;\n",
+        "<?php\n$cfg['blowfish_secret'] = '{blowfish_secret}';\n$i = 0;\n$i++;\n$cfg['Servers'][$i]['auth_type'] = 'cookie';\n$cfg['Servers'][$i]['host'] = '{}';\n$cfg['Servers'][$i]['port'] = '{}';\n$cfg['Servers'][$i]['compress'] = false;\n$cfg['Servers'][$i]['AllowNoPassword'] = false;\n",
         profile.host, profile.port
     )
 }
 
-fn caddy_phpmyadmin_route(document_root: &Path) -> String {
+fn caddy_phpmyadmin_route(site_address: &str, document_root: &Path) -> String {
     format!(
-        "http://127.0.0.1 {{\n  handle_path /phpmyadmin* {{\n    root * {}\n    php_fastcgi 127.0.0.1:9000\n    file_server\n  }}\n}}\n",
+        "{{\n  auto_https off\n}}\n\n{} {{\n  handle_path /phpmyadmin* {{\n    root * {}\n    php_fastcgi 127.0.0.1:9000\n    file_server\n  }}\n}}\n",
+        site_address,
         document_root.to_string_lossy()
+    )
+}
+
+fn phpmyadmin_base_url(admin_url: &str) -> String {
+    admin_url
+        .split('?')
+        .next()
+        .unwrap_or(admin_url)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn phpmyadmin_site_address(base_url: &str) -> AppResult<String> {
+    let (scheme, rest) = base_url.split_once("://").ok_or_else(|| {
+        AppError::Validation("phpMyAdmin base URL must include a scheme".to_string())
+    })?;
+
+    if scheme != "http" && scheme != "https" {
+        return Err(AppError::Validation(
+            "phpMyAdmin base URL must use http or https".to_string(),
+        ));
+    }
+
+    let host_and_port = rest
+        .split('/')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Validation("phpMyAdmin base URL host is required".to_string()))?;
+
+    if !is_loopback_host_and_port(host_and_port) {
+        return Err(AppError::Validation(
+            "phpMyAdmin managed reverse proxy must bind to localhost".to_string(),
+        ));
+    }
+
+    Ok(format!("{scheme}://{host_and_port}"))
+}
+
+fn start_phpmyadmin_reverse_proxy(config_path: &Path) -> AppResult<bool> {
+    let Some(caddy_path) = ExecutableResolver::from_env().resolve("caddy") else {
+        return Err(AppError::Configuration(
+            "Caddy executable was not found after package installation".to_string(),
+        ));
+    };
+    let runner = CommandRunner::new(
+        CommandPolicy::deny_all()
+            .allow_program_paths([caddy_path.clone()])
+            .with_default_timeout(SERVICE_TIMEOUT)
+            .with_max_output_bytes(OUTPUT_LIMIT_BYTES),
+    );
+    let config_path = config_path.to_string_lossy().into_owned();
+
+    run_caddy_command(
+        &runner,
+        &caddy_path,
+        [
+            "validate",
+            "--config",
+            &config_path,
+            "--adapter",
+            "caddyfile",
+        ],
+    )?;
+
+    let reload_output = run_caddy_command_without_success_check(
+        &runner,
+        &caddy_path,
+        ["reload", "--config", &config_path, "--adapter", "caddyfile"],
+    )?;
+
+    if reload_output.exit_code == Some(0) && !reload_output.timed_out {
+        return Ok(true);
+    }
+
+    run_caddy_command(
+        &runner,
+        &caddy_path,
+        ["start", "--config", &config_path, "--adapter", "caddyfile"],
+    )?;
+
+    Ok(true)
+}
+
+fn is_loopback_host_and_port(host_and_port: &str) -> bool {
+    host_and_port == "127.0.0.1"
+        || host_and_port.starts_with("127.0.0.1:")
+        || host_and_port == "localhost"
+        || host_and_port.starts_with("localhost:")
+        || host_and_port == "[::1]"
+        || host_and_port.starts_with("[::1]:")
+}
+
+fn run_caddy_command(
+    runner: &CommandRunner,
+    caddy_path: &Path,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> AppResult<ProcessOutput> {
+    let output = run_caddy_command_without_success_check(runner, caddy_path, args)?;
+
+    if output.timed_out {
+        return Err(AppError::Infrastructure(
+            "Caddy command timed out while configuring phpMyAdmin".to_string(),
+        ));
+    }
+
+    if output.exit_code != Some(0) {
+        return Err(AppError::Infrastructure(format!(
+            "Caddy command failed while configuring phpMyAdmin: {}",
+            summarize_output(&output)
+        )));
+    }
+
+    Ok(output)
+}
+
+fn run_caddy_command_without_success_check(
+    runner: &CommandRunner,
+    caddy_path: &Path,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> AppResult<ProcessOutput> {
+    runner.execute(
+        ProcessCommand::new(caddy_path.to_string_lossy().into_owned())
+            .args(args)
+            .timeout(SERVICE_TIMEOUT),
     )
 }
 
