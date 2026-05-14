@@ -156,12 +156,6 @@ fn create_mysql_resources(
     profile: &ProjectDatabaseProfile,
     password: &str,
 ) -> Result<(), ProvisioningAttemptError> {
-    let Some(admin_user) = env_value("AXIOM_MYSQL_ADMIN_USER") else {
-        return Err(ProvisioningAttemptError::Pending(
-            "MySQL data directory and credential are ready. Set AXIOM_MYSQL_ADMIN_USER before creating the database/user automatically.".to_string(),
-        ));
-    };
-
     let sql = format!(
         "CREATE DATABASE IF NOT EXISTS `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\
          CREATE USER IF NOT EXISTS '{username}'@'127.0.0.1' IDENTIFIED BY '{password}';\
@@ -173,38 +167,65 @@ fn create_mysql_resources(
         username = profile.username,
         password = escape_sql_literal(password),
     );
-    let mut command = ProcessCommand::new("mysql").args([
-        "--batch",
-        "--silent",
-        "--host",
-        &profile.host,
-        "--port",
-        &profile.port.to_string(),
-        "--user",
-        &admin_user,
-        "--execute",
-        &sql,
-    ]);
 
-    if let Some(admin_password) = env_value("AXIOM_MYSQL_ADMIN_PASSWORD") {
-        command = command.env("MYSQL_PWD", admin_password);
+    let mut errors = Vec::new();
+    for admin_user in mysql_admin_users() {
+        let mut command = ProcessCommand::new("mysql").args([
+            "--batch",
+            "--silent",
+            "--host",
+            &profile.host,
+            "--port",
+            &profile.port.to_string(),
+            "--user",
+            &admin_user,
+            "--execute",
+            &sql,
+        ]);
+
+        if let Some(admin_password) = env_value("AXIOM_MYSQL_ADMIN_PASSWORD") {
+            command = command.env("MYSQL_PWD", admin_password);
+        }
+
+        match run_database_command("mysql", command, DATABASE_COMMAND_TIMEOUT) {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(format!("{admin_user}: {error}")),
+        }
     }
 
-    run_database_command("mysql", command, DATABASE_COMMAND_TIMEOUT)
-        .map(|_| ())
-        .map_err(provisioning_failure("MySQL provisioning failed"))
+    Err(ProvisioningAttemptError::Pending(format!(
+        "MySQL is installed, but automatic admin access did not succeed for root/current-user candidates. Configure AXIOM_MYSQL_ADMIN_USER if this server requires a specific administrator. Attempts: {}",
+        errors.join(" | ")
+    )))
 }
 
 fn create_postgres_resources(
     profile: &ProjectDatabaseProfile,
     password: &str,
 ) -> Result<(), ProvisioningAttemptError> {
-    let admin_user =
-        env_value("AXIOM_POSTGRES_ADMIN_USER").unwrap_or_else(|| "postgres".to_string());
+    let mut errors = Vec::new();
 
+    for admin_user in postgres_admin_users() {
+        match create_postgres_resources_with_admin(profile, password, &admin_user) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(format!("{admin_user}: {error:?}")),
+        }
+    }
+
+    Err(ProvisioningAttemptError::Pending(format!(
+        "PostgreSQL is installed, but automatic admin access did not succeed for postgres/current-user candidates. Configure AXIOM_POSTGRES_ADMIN_USER if this server requires a specific administrator. Attempts: {}",
+        errors.join(" | ")
+    )))
+}
+
+fn create_postgres_resources_with_admin(
+    profile: &ProjectDatabaseProfile,
+    password: &str,
+    admin_user: &str,
+) -> Result<(), ProvisioningAttemptError> {
     let exists_output = run_postgres_admin_command(
         profile,
-        &admin_user,
+        admin_user,
         &format!(
             "SELECT 1 FROM pg_database WHERE datname = '{}';",
             escape_sql_literal(&profile.database_name)
@@ -217,7 +238,7 @@ fn create_postgres_resources(
     if !exists_output.stdout.lines().any(|line| line.trim() == "1") {
         run_postgres_admin_command(
             profile,
-            &admin_user,
+            admin_user,
             &format!(
                 "CREATE DATABASE {};",
                 quote_identifier(&profile.database_name)
@@ -239,7 +260,7 @@ fn create_postgres_resources(
         database_ident = quote_identifier(&profile.database_name),
     );
 
-    run_postgres_admin_command(profile, &admin_user, &role_sql)
+    run_postgres_admin_command(profile, admin_user, &role_sql)
         .map(|_| ())
         .map_err(provisioning_failure("PostgreSQL role provisioning failed"))
 }
@@ -324,4 +345,56 @@ fn provisioning_failure(
         }
         error => ProvisioningAttemptError::Failed(format!("{context}: {error}")),
     }
+}
+
+fn mysql_admin_users() -> Vec<String> {
+    let mut users = Vec::new();
+
+    if let Some(admin_user) = env_value("AXIOM_MYSQL_ADMIN_USER") {
+        users.push(admin_user);
+    }
+
+    users.push("root".to_string());
+
+    if let Some(current_user) = current_os_user() {
+        users.push(current_user);
+    }
+
+    deduplicate(users)
+}
+
+fn postgres_admin_users() -> Vec<String> {
+    let mut users = Vec::new();
+
+    if let Some(admin_user) = env_value("AXIOM_POSTGRES_ADMIN_USER") {
+        users.push(admin_user);
+    }
+
+    users.push("postgres".to_string());
+
+    if let Some(current_user) = current_os_user() {
+        users.push(current_user);
+    }
+
+    deduplicate(users)
+}
+
+fn current_os_user() -> Option<String> {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .map(|user| user.trim().to_string())
+        .filter(|user| !user.is_empty())
+}
+
+fn deduplicate(values: Vec<String>) -> Vec<String> {
+    let mut deduplicated = Vec::new();
+
+    for value in values {
+        if !deduplicated.iter().any(|existing| existing == &value) {
+            deduplicated.push(value);
+        }
+    }
+
+    deduplicated
 }

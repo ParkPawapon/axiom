@@ -32,12 +32,60 @@ pub struct ProjectDatabaseProfile {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManagedDatabaseDependencyStatus {
+    Installed,
+    Pending,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDatabasePackage {
+    pub package_name: String,
+    pub already_installed: bool,
+    pub installed_now: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDatabaseDependencyReport {
+    pub database_type: DatabaseType,
+    pub provider: String,
+    pub status: ManagedDatabaseDependencyStatus,
+    pub packages: Vec<ManagedDatabasePackage>,
+    pub diagnostics: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDatabaseServiceReport {
+    pub service_id: String,
+    pub started: bool,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhpMyAdminAccess {
+    pub url: String,
+    pub document_root: String,
+    pub config_path: String,
+    pub reverse_proxy_config_path: String,
+    pub reverse_proxy_started: bool,
+    pub status_message: String,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseProvisioningResult {
     pub profile: ProjectDatabaseProfile,
     pub credential_stored: bool,
     pub database_created: bool,
+    pub dependency_report: Option<ManagedDatabaseDependencyReport>,
+    pub phpmyadmin_access: Option<PhpMyAdminAccess>,
+    pub service_report: Option<ManagedDatabaseServiceReport>,
     pub status_message: String,
 }
 

@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::infrastructure::databases::local_database_provisioner::LocalDatabaseProvisioner;
+use crate::infrastructure::databases::managed_database_dependency_manager::ManagedDatabaseDependencyManager;
 use crate::infrastructure::logging::file_log_reader::FileLogReader;
 use crate::infrastructure::persistence::file_database_provisioning_repository::FileDatabaseProvisioningRepository;
 use crate::infrastructure::persistence::file_project_repository::FileProjectRepository;
@@ -11,6 +12,7 @@ use crate::infrastructure::runtimes::package_manager_php_installer::PackageManag
 use crate::infrastructure::runtimes::php_binary_detector::PhpBinaryDetector;
 use crate::infrastructure::secure_storage::keychain_storage::KeychainStorage;
 use crate::infrastructure::services::local_service_manager::LocalServiceManager;
+use crate::ports::database_dependency_manager::DatabaseDependencyManager;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
 use crate::ports::log_reader::LogReader;
@@ -26,6 +28,7 @@ use crate::shared::result::app_result::AppResult;
 #[derive(Clone)]
 pub struct AppState {
     pub app_name: &'static str,
+    database_dependency_manager: Arc<dyn DatabaseDependencyManager>,
     database_provisioner: Arc<dyn DatabaseProvisioner>,
     database_provisioning_repository: Arc<dyn DatabaseProvisioningRepository>,
     log_reader: Arc<dyn LogReader>,
@@ -48,9 +51,12 @@ impl AppState {
             as Arc<dyn DatabaseProvisioner>;
         let database_provisioning_repository = Arc::new(FileDatabaseProvisioningRepository::new()?)
             as Arc<dyn DatabaseProvisioningRepository>;
+        let database_dependency_manager =
+            Arc::new(ManagedDatabaseDependencyManager::new()) as Arc<dyn DatabaseDependencyManager>;
 
         Ok(Self {
             app_name: "AxiomPHP",
+            database_dependency_manager,
             database_provisioner,
             database_provisioning_repository,
             log_reader: Arc::new(FileLogReader::new()?),
@@ -69,6 +75,10 @@ impl AppState {
 
     pub fn database_provisioner(&self) -> &dyn DatabaseProvisioner {
         self.database_provisioner.as_ref()
+    }
+
+    pub fn database_dependency_manager(&self) -> &dyn DatabaseDependencyManager {
+        self.database_dependency_manager.as_ref()
     }
 
     pub fn database_provisioning_repository(&self) -> &dyn DatabaseProvisioningRepository {

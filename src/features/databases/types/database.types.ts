@@ -1,6 +1,7 @@
 export type DatabaseType = "mysql" | "postgresql";
 
 export type DatabaseProvisioningStatus = "failed" | "pending" | "ready";
+export type ManagedDatabaseDependencyStatus = "installed" | "pending";
 
 export interface ProjectDatabaseProfile {
   readonly projectId: string;
@@ -24,6 +25,39 @@ export interface DatabaseProvisioningResult {
   readonly profile: ProjectDatabaseProfile;
   readonly credentialStored: boolean;
   readonly databaseCreated: boolean;
+  readonly dependencyReport?: ManagedDatabaseDependencyReport | null;
+  readonly phpmyadminAccess?: PhpMyAdminAccess | null;
+  readonly serviceReport?: ManagedDatabaseServiceReport | null;
+  readonly statusMessage: string;
+}
+
+export interface ManagedDatabasePackage {
+  readonly packageName: string;
+  readonly alreadyInstalled: boolean;
+  readonly installedNow: boolean;
+}
+
+export interface ManagedDatabaseDependencyReport {
+  readonly databaseType: DatabaseType;
+  readonly provider: string;
+  readonly status: ManagedDatabaseDependencyStatus;
+  readonly packages: ManagedDatabasePackage[];
+  readonly diagnostics: string[];
+  readonly statusMessage: string;
+}
+
+export interface ManagedDatabaseServiceReport {
+  readonly serviceId: string;
+  readonly started: boolean;
+  readonly statusMessage: string;
+}
+
+export interface PhpMyAdminAccess {
+  readonly url: string;
+  readonly documentRoot: string;
+  readonly configPath: string;
+  readonly reverseProxyConfigPath: string;
+  readonly reverseProxyStarted: boolean;
   readonly statusMessage: string;
 }
 

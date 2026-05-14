@@ -174,7 +174,9 @@ mod tests {
                 data_dir: "/tmp/data".to_string(),
                 backup_dir: "/tmp/backups".to_string(),
                 migration_dir: "/tmp/migrations".to_string(),
-                admin_url: Some("http://127.0.0.1/phpmyadmin?db=ax_project_one_mysql".to_string()),
+                admin_url: Some(
+                    "http://127.0.0.1:8088/phpmyadmin?db=ax_project_one_mysql".to_string(),
+                ),
                 status: DatabaseProvisioningStatus::Pending,
                 status_message: "pending".to_string(),
                 applied_migrations: Vec::new(),

@@ -23,7 +23,13 @@ import {
 import { DatabaseServiceCard } from "../components/database-service-card";
 import { MysqlStatusPanel } from "../components/mysql-status-panel";
 import { PostgresStatusPanel } from "../components/postgres-status-panel";
-import type { DatabaseType, ProjectDatabaseProfile } from "../types/database.types";
+import type {
+  DatabaseProvisioningResult,
+  DatabaseType,
+  ManagedDatabaseDependencyStatus,
+  ManagedDatabasePackage,
+  ProjectDatabaseProfile,
+} from "../types/database.types";
 
 const databaseTypes = ["mysql", "postgresql"] as const satisfies readonly DatabaseType[];
 
@@ -40,6 +46,9 @@ export function DatabasesPage() {
   });
   const [noticeMessage, setNoticeMessage] = useState<string>();
   const [profiles, setProfiles] = useState<ProjectDatabaseProfile[]>([]);
+  const [provisioningResults, setProvisioningResults] = useState<
+    Partial<Record<DatabaseType, DatabaseProvisioningResult>>
+  >({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [restorePaths, setRestorePaths] = useState<Record<DatabaseType, string>>({
     mysql: "",
@@ -135,7 +144,11 @@ export function DatabasesPage() {
 
     void runAction(`provision:${databaseType}`, async () => {
       const result = await provisionProjectDatabase(selectedProjectId, databaseType);
-      return result.statusMessage;
+      setProvisioningResults((currentResults) => ({
+        ...currentResults,
+        [databaseType]: result,
+      }));
+      return provisioningNotice(result);
     });
   };
 
@@ -243,6 +256,7 @@ export function DatabasesPage() {
       <section className="grid gap-4 xl:grid-cols-2">
         {databaseTypes.map((databaseType) => {
           const profile = profileByType[databaseType];
+          const provisioningResult = provisioningResults[databaseType];
           const ready = profile?.status === "ready";
 
           return (
@@ -316,6 +330,87 @@ export function DatabasesPage() {
                 <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
                   {profile.statusMessage}
                 </p>
+              ) : null}
+
+              {provisioningResult ? (
+                <section className="grid gap-3 border border-voicebox-border bg-voicebox-surface p-3">
+                  <div>
+                    <p className="font-mono text-xs uppercase text-voicebox-tertiary">
+                      Managed provisioning
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-voicebox-black">
+                      {provisioningResult.statusMessage}
+                    </p>
+                  </div>
+
+                  {provisioningResult.dependencyReport ? (
+                    <div className="grid gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs uppercase text-voicebox-secondary">
+                          {provisioningResult.dependencyReport.provider}
+                        </span>
+                        <span
+                          className={dependencyClassName(
+                            provisioningResult.dependencyReport.status,
+                          )}
+                        >
+                          {provisioningResult.dependencyReport.status}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {provisioningResult.dependencyReport.packages.map((managedPackage) => (
+                          <span
+                            key={managedPackage.packageName}
+                            className={packageClassName(managedPackage)}
+                          >
+                            {managedPackage.packageName}: {packageLabel(managedPackage)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {provisioningResult.serviceReport ? (
+                    <p className="font-mono text-xs leading-relaxed text-voicebox-secondary">
+                      {provisioningResult.serviceReport.statusMessage}
+                    </p>
+                  ) : null}
+
+                  {provisioningResult.phpmyadminAccess ? (
+                    <div className="grid gap-2 border-t border-voicebox-border pt-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs uppercase text-voicebox-secondary">
+                          phpMyAdmin
+                        </span>
+                        <span
+                          className={
+                            provisioningResult.phpmyadminAccess.reverseProxyStarted
+                              ? "border border-voicebox-success px-2 py-1 font-mono text-xs uppercase text-voicebox-success"
+                              : "border border-voicebox-warning px-2 py-1 font-mono text-xs uppercase text-voicebox-warning"
+                          }
+                        >
+                          {provisioningResult.phpmyadminAccess.reverseProxyStarted
+                            ? "Proxy requested"
+                            : "Proxy pending"}
+                        </span>
+                      </div>
+                      <a
+                        className="break-all font-mono text-xs font-bold text-voicebox-black underline"
+                        href={provisioningResult.phpmyadminAccess.url}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        {provisioningResult.phpmyadminAccess.url}
+                      </a>
+                      <p className="break-all font-mono text-xs text-voicebox-secondary">
+                        Config: {provisioningResult.phpmyadminAccess.configPath}
+                      </p>
+                      <p className="break-all font-mono text-xs text-voicebox-secondary">
+                        Proxy: {provisioningResult.phpmyadminAccess.reverseProxyConfigPath}
+                      </p>
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
 
               <div className="flex flex-wrap gap-2">
@@ -447,4 +542,47 @@ function statusClassName(status: ProjectDatabaseProfile["status"] | undefined) {
   }
 
   return `${baseClassName} border-voicebox-border text-voicebox-secondary`;
+}
+
+function provisioningNotice(result: DatabaseProvisioningResult) {
+  return [
+    result.statusMessage,
+    result.dependencyReport?.statusMessage,
+    result.serviceReport?.statusMessage,
+    result.phpmyadminAccess?.statusMessage,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function dependencyClassName(status: ManagedDatabaseDependencyStatus) {
+  const baseClassName = "border px-2 py-1 font-mono text-xs uppercase";
+
+  if (status === "installed") {
+    return `${baseClassName} border-voicebox-success text-voicebox-success`;
+  }
+
+  return `${baseClassName} border-voicebox-warning text-voicebox-warning`;
+}
+
+function packageClassName(managedPackage: ManagedDatabasePackage) {
+  const baseClassName = "border px-2 py-1 font-mono text-xs uppercase";
+
+  if (managedPackage.installedNow || managedPackage.alreadyInstalled) {
+    return `${baseClassName} border-voicebox-success text-voicebox-success`;
+  }
+
+  return `${baseClassName} border-voicebox-warning text-voicebox-warning`;
+}
+
+function packageLabel(managedPackage: ManagedDatabasePackage) {
+  if (managedPackage.installedNow) {
+    return "installed";
+  }
+
+  if (managedPackage.alreadyInstalled) {
+    return "present";
+  }
+
+  return "pending";
 }
