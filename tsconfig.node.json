@@ -7,8 +7,9 @@
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
     "allowSyntheticDefaultImports": true,
+    "types": ["vite/client"],
     "strict": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "tailwind.config.ts"]
+  "include": ["tailwind.config.ts"]
 }
