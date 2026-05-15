@@ -1,5 +1,9 @@
 import { invokeTauriCommand } from "../../../core/api/tauri-client";
 import type {
+  DatabaseBackupOptions,
+  DatabaseBackupPolicy,
+  DatabaseBackupPolicyUpdate,
+  DatabaseBackupPolicyUpdateResult,
   DatabaseBackupResult,
   DatabaseMigrationFile,
   DatabaseMigrationRunResult,
@@ -7,6 +11,7 @@ import type {
   DatabaseRestoreResult,
   DatabaseType,
   ProjectDatabaseProfile,
+  ScheduledDatabaseBackupRunResult,
 } from "../types/database.types";
 
 export function listProjectDatabaseProfiles(projectId: string) {
@@ -22,11 +27,38 @@ export function provisionProjectDatabase(projectId: string, databaseType: Databa
   });
 }
 
-export function backupProjectDatabase(projectId: string, databaseType: DatabaseType) {
+export function backupProjectDatabase(
+  projectId: string,
+  databaseType: DatabaseType,
+  options?: DatabaseBackupOptions,
+) {
   return invokeTauriCommand<DatabaseBackupResult>("backup_project_database", {
     projectId,
     databaseType,
+    options,
   });
+}
+
+export function listDatabaseBackupPolicies(projectId: string) {
+  return invokeTauriCommand<DatabaseBackupPolicy[]>("list_database_backup_policies", {
+    projectId,
+  });
+}
+
+export function updateDatabaseBackupPolicy(
+  projectId: string,
+  databaseType: DatabaseType,
+  update: DatabaseBackupPolicyUpdate,
+) {
+  return invokeTauriCommand<DatabaseBackupPolicyUpdateResult>("update_database_backup_policy", {
+    databaseType,
+    projectId,
+    update,
+  });
+}
+
+export function runDueDatabaseBackups() {
+  return invokeTauriCommand<ScheduledDatabaseBackupRunResult>("run_due_database_backups");
 }
 
 export function restoreProjectDatabase(

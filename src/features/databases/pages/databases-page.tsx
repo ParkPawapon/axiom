@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { ErrorPanel } from "../../../shared/components/feedback/error-panel";
 import { LoadingState } from "../../../shared/components/feedback/loading-state";
@@ -7,6 +8,7 @@ import { Button } from "../../../shared/components/ui/button";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import { Input } from "../../../shared/components/ui/input";
 import { Select } from "../../../shared/components/ui/select";
+import { formatDate } from "../../../shared/utils/format-date";
 import { getErrorMessage } from "../../../shared/utils/get-error-message";
 import { listProjects } from "../../projects/api/project.commands";
 import type { Project } from "../../projects/types/project.types";
@@ -15,16 +17,23 @@ import type { ManagedService } from "../../services/types/service.types";
 import {
   backupProjectDatabase,
   createProjectDatabaseMigration,
+  listDatabaseBackupPolicies,
   listProjectDatabaseProfiles,
   provisionProjectDatabase,
   restoreProjectDatabase,
+  runDueDatabaseBackups,
   runProjectDatabaseMigrations,
+  updateDatabaseBackupPolicy,
 } from "../api/database.commands";
+import { DatabaseBackupControls } from "../components/database-backup-controls";
 import { DatabaseServiceCard } from "../components/database-service-card";
 import { MysqlStatusPanel } from "../components/mysql-status-panel";
 import { PostgresStatusPanel } from "../components/postgres-status-panel";
 import type {
   DatabaseProvisioningResult,
+  DatabaseBackupOptions,
+  DatabaseBackupPolicy,
+  DatabaseBackupPolicyUpdate,
   DatabaseType,
   ManagedDatabaseDependencyStatus,
   ManagedDatabasePackage,
@@ -33,13 +42,39 @@ import type {
 
 const databaseTypes = ["mysql", "postgresql"] as const satisfies readonly DatabaseType[];
 
-type ActionName = "backup" | "migration:create" | "migration:run" | "provision" | "restore";
-type ActionKey = `${ActionName}:${DatabaseType}`;
+type ActionName =
+  | "backup"
+  | "migration:create"
+  | "migration:run"
+  | "provision"
+  | "restore"
+  | "schedule:save";
+type ActionKey = `${ActionName}:${DatabaseType}` | "schedule:runDue";
+
+const defaultBackupOptions: DatabaseBackupOptions = {
+  compression: "gzip",
+  encryption: "aes256Gcm",
+  retentionDays: 30,
+};
+
+const defaultPolicyInput: DatabaseBackupPolicyUpdate = {
+  ...defaultBackupOptions,
+  enabled: false,
+  intervalMinutes: 1440,
+};
 
 export function DatabasesPage() {
   const [actionKey, setActionKey] = useState<ActionKey>();
+  const isBackupSweepRunning = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
+  const [backupOptions, setBackupOptions] = useState<Record<DatabaseType, DatabaseBackupOptions>>({
+    mysql: defaultBackupOptions,
+    postgresql: defaultBackupOptions,
+  });
+  const [backupPolicies, setBackupPolicies] = useState<
+    Partial<Record<DatabaseType, DatabaseBackupPolicy>>
+  >({});
   const [migrationNames, setMigrationNames] = useState<Record<DatabaseType, string>>({
     mysql: "",
     postgresql: "",
@@ -53,6 +88,12 @@ export function DatabasesPage() {
   const [restorePaths, setRestorePaths] = useState<Record<DatabaseType, string>>({
     mysql: "",
     postgresql: "",
+  });
+  const [scheduleInputs, setScheduleInputs] = useState<
+    Record<DatabaseType, DatabaseBackupPolicyUpdate>
+  >({
+    mysql: defaultPolicyInput,
+    postgresql: defaultPolicyInput,
   });
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [services, setServices] = useState<ManagedService[]>([]);
@@ -88,13 +129,80 @@ export function DatabasesPage() {
     }
   }, []);
 
+  const loadBackupPolicies = useCallback(async (projectId: string) => {
+    if (!projectId) {
+      setBackupPolicies({});
+      return;
+    }
+
+    try {
+      const policies = await listDatabaseBackupPolicies(projectId);
+      const policiesByType = policies.reduce<Partial<Record<DatabaseType, DatabaseBackupPolicy>>>(
+        (currentPolicies, policy) => {
+          currentPolicies[policy.databaseType] = policy;
+          return currentPolicies;
+        },
+        {},
+      );
+
+      setBackupPolicies(policiesByType);
+      setScheduleInputs((currentInputs) => ({
+        mysql: policyInputFromPolicy(policiesByType.mysql, currentInputs.mysql),
+        postgresql: policyInputFromPolicy(policiesByType.postgresql, currentInputs.postgresql),
+      }));
+      setBackupOptions((currentOptions) => ({
+        mysql: backupOptionsFromPolicy(policiesByType.mysql, currentOptions.mysql),
+        postgresql: backupOptionsFromPolicy(policiesByType.postgresql, currentOptions.postgresql),
+      }));
+    } catch (error) {
+      setErrorMessage(
+        getErrorMessage(error, "Database backup policies could not be loaded safely."),
+      );
+    }
+  }, []);
+
   useEffect(() => {
     void loadInventory();
   }, [loadInventory]);
 
   useEffect(() => {
     void loadProfiles(selectedProjectId);
-  }, [loadProfiles, selectedProjectId]);
+    void loadBackupPolicies(selectedProjectId);
+  }, [loadBackupPolicies, loadProfiles, selectedProjectId]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (actionKey || isBackupSweepRunning.current) {
+        return;
+      }
+
+      isBackupSweepRunning.current = true;
+
+      void (async () => {
+        try {
+          const result = await runDueDatabaseBackups();
+
+          if (result.completedBackups > 0) {
+            setNoticeMessage(scheduledBackupNotice(result));
+            await Promise.all([
+              loadProfiles(selectedProjectId),
+              loadBackupPolicies(selectedProjectId),
+            ]);
+          }
+
+          if (result.errors.length > 0) {
+            setErrorMessage(result.errors.join(" "));
+          }
+        } catch (error) {
+          setErrorMessage(getErrorMessage(error, "Scheduled backup check failed safely."));
+        } finally {
+          isBackupSweepRunning.current = false;
+        }
+      })();
+    }, 60_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [actionKey, loadBackupPolicies, loadProfiles, selectedProjectId]);
 
   const databaseServices = useMemo(
     () =>
@@ -128,13 +236,14 @@ export function DatabasesPage() {
         const message = await action();
         setNoticeMessage(message);
         await loadProfiles(selectedProjectId);
+        await loadBackupPolicies(selectedProjectId);
       } catch (error) {
         setErrorMessage(getErrorMessage(error, "Database action failed safely."));
       } finally {
         setActionKey(undefined);
       }
     },
-    [loadProfiles, selectedProjectId],
+    [loadBackupPolicies, loadProfiles, selectedProjectId],
   );
 
   const provisionDatabase = (databaseType: DatabaseType) => {
@@ -158,9 +267,51 @@ export function DatabasesPage() {
     }
 
     void runAction(`backup:${databaseType}`, async () => {
-      const result = await backupProjectDatabase(selectedProjectId, databaseType);
-      return `${result.statusMessage} ${result.backupPath}`;
+      const result = await backupProjectDatabase(
+        selectedProjectId,
+        databaseType,
+        backupOptions[databaseType],
+      );
+      return [
+        result.statusMessage,
+        result.backupPath,
+        result.encrypted ? "Encrypted" : "Not encrypted",
+        result.compressed ? "Compressed" : "Not compressed",
+        result.prunedBackupPaths.length > 0
+          ? `Pruned ${result.prunedBackupPaths.length} expired artifact(s).`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
     });
+  };
+
+  const pickRestorePath = (databaseType: DatabaseType) => {
+    void (async () => {
+      setErrorMessage(undefined);
+
+      try {
+        const selectedPath = await open({
+          directory: false,
+          filters: [
+            {
+              extensions: ["sql", "gz", "enc"],
+              name: "Database backup",
+            },
+          ],
+          multiple: false,
+        });
+
+        if (typeof selectedPath === "string") {
+          setRestorePaths((currentPaths) => ({
+            ...currentPaths,
+            [databaseType]: selectedPath,
+          }));
+        }
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error, "Restore file picker could not be opened safely."));
+      }
+    })();
   };
 
   const restoreDatabase = (databaseType: DatabaseType) => {
@@ -172,7 +323,39 @@ export function DatabasesPage() {
 
     void runAction(`restore:${databaseType}`, async () => {
       const result = await restoreProjectDatabase(selectedProjectId, databaseType, backupPath);
-      return `${result.statusMessage} ${result.backupPath}`;
+      return [
+        result.statusMessage,
+        `Source: ${result.restoredFromPath}`,
+        result.decrypted ? "Decrypted" : undefined,
+        result.decompressed ? "Decompressed" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    });
+  };
+
+  const saveBackupPolicy = (databaseType: DatabaseType) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    void runAction(`schedule:save:${databaseType}`, async () => {
+      const update = scheduleInputs[databaseType];
+      const result = await updateDatabaseBackupPolicy(selectedProjectId, databaseType, {
+        ...update,
+        compression: backupOptions[databaseType].compression,
+        encryption: backupOptions[databaseType].encryption,
+        retentionDays: update.retentionDays,
+      });
+
+      return result.statusMessage;
+    });
+  };
+
+  const runScheduledBackups = () => {
+    void runAction("schedule:runDue", async () => {
+      const result = await runDueDatabaseBackups();
+      return scheduledBackupNotice(result);
     });
   };
 
@@ -251,6 +434,16 @@ export function DatabasesPage() {
             {selectedProject.documentRoot}
           </p>
         ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={actionKey === "schedule:runDue"}
+            onClick={runScheduledBackups}
+            variant="secondary"
+          >
+            Run due backups
+          </Button>
+        </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
@@ -421,13 +614,6 @@ export function DatabasesPage() {
                   Provision
                 </Button>
                 <Button
-                  disabled={!ready || actionKey === `backup:${databaseType}`}
-                  onClick={() => backupDatabase(databaseType)}
-                  variant="secondary"
-                >
-                  Backup
-                </Button>
-                <Button
                   disabled={!ready || actionKey === `migration:run:${databaseType}`}
                   onClick={() => runMigrations(databaseType)}
                   variant="secondary"
@@ -435,6 +621,37 @@ export function DatabasesPage() {
                   Run migrations
                 </Button>
               </div>
+
+              <DatabaseBackupControls
+                actionKey={actionKey}
+                backupOptions={backupOptions[databaseType]}
+                databaseType={databaseType}
+                policy={scheduleInputs[databaseType]}
+                ready={ready}
+                restorePath={restorePaths[databaseType]}
+                onBackup={() => backupDatabase(databaseType)}
+                onBackupOptionsChange={(options) =>
+                  setBackupOptions((currentOptions) => ({
+                    ...currentOptions,
+                    [databaseType]: options,
+                  }))
+                }
+                onPickRestorePath={() => pickRestorePath(databaseType)}
+                onPolicyChange={(policy) =>
+                  setScheduleInputs((currentInputs) => ({
+                    ...currentInputs,
+                    [databaseType]: policy,
+                  }))
+                }
+                onRestore={() => restoreDatabase(databaseType)}
+                onSavePolicy={() => saveBackupPolicy(databaseType)}
+              />
+
+              {backupPolicies[databaseType] ? (
+                <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
+                  {scheduleStatus(backupPolicies[databaseType])}
+                </p>
+              ) : null}
 
               <div className="grid gap-2">
                 <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
@@ -460,33 +677,6 @@ export function DatabasesPage() {
                   variant="secondary"
                 >
                   Create migration
-                </Button>
-              </div>
-
-              <div className="grid gap-2">
-                <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
-                  Restore .sql path
-                  <Input
-                    value={restorePaths[databaseType]}
-                    onChange={(event) =>
-                      setRestorePaths((current) => ({
-                        ...current,
-                        [databaseType]: event.target.value,
-                      }))
-                    }
-                    placeholder="/absolute/path/backup.sql"
-                  />
-                </label>
-                <Button
-                  disabled={
-                    !ready ||
-                    !restorePaths[databaseType].trim() ||
-                    actionKey === `restore:${databaseType}`
-                  }
-                  onClick={() => restoreDatabase(databaseType)}
-                  variant="secondary"
-                >
-                  Restore
                 </Button>
               </div>
             </article>
@@ -585,4 +775,64 @@ function packageLabel(managedPackage: ManagedDatabasePackage) {
   }
 
   return "pending";
+}
+
+function backupOptionsFromPolicy(
+  policy: DatabaseBackupPolicy | undefined,
+  fallback: DatabaseBackupOptions,
+): DatabaseBackupOptions {
+  if (!policy) {
+    return fallback;
+  }
+
+  return {
+    compression: policy.compression,
+    encryption: policy.encryption,
+    retentionDays: policy.retentionDays,
+  };
+}
+
+function policyInputFromPolicy(
+  policy: DatabaseBackupPolicy | undefined,
+  fallback: DatabaseBackupPolicyUpdate,
+): DatabaseBackupPolicyUpdate {
+  if (!policy) {
+    return fallback;
+  }
+
+  return {
+    compression: policy.compression,
+    enabled: policy.enabled,
+    encryption: policy.encryption,
+    intervalMinutes: policy.intervalMinutes,
+    retentionDays: policy.retentionDays,
+  };
+}
+
+function scheduleStatus(policy: DatabaseBackupPolicy | undefined) {
+  if (!policy) {
+    return "No scheduled backup policy saved.";
+  }
+
+  const scheduleState = policy.enabled
+    ? `enabled every ${policy.intervalMinutes} minute(s)`
+    : "disabled";
+
+  return [
+    `Schedule ${scheduleState}.`,
+    `Retention ${policy.retentionDays} day(s).`,
+    `Compression ${policy.compression}.`,
+    `Encryption ${policy.encryption}.`,
+    policy.lastRunAt ? `Last run ${formatDate(policy.lastRunAt)}.` : "Last run pending.",
+    policy.nextRunAt ? `Next run ${formatDate(policy.nextRunAt)}.` : "Next run not scheduled.",
+  ].join(" ");
+}
+
+function scheduledBackupNotice(result: {
+  readonly statusMessage: string;
+  readonly errors: readonly string[];
+}) {
+  return [result.statusMessage, result.errors.length > 0 ? result.errors.join(" ") : undefined]
+    .filter(Boolean)
+    .join(" ");
 }
