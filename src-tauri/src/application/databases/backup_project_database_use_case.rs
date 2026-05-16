@@ -1,4 +1,4 @@
-use crate::domain::database::database_config::DatabaseBackupResult;
+use crate::domain::database::database_config::{DatabaseBackupOptions, DatabaseBackupResult};
 use crate::domain::project::project_id::ProjectId;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
@@ -13,6 +13,7 @@ pub fn backup_project_database(
     database_provisioner: &dyn DatabaseProvisioner,
     project_id: &str,
     database_type: &str,
+    options: Option<DatabaseBackupOptions>,
 ) -> AppResult<DatabaseBackupResult> {
     let project_id = ProjectId(validate_project_id(project_id)?.to_string());
     let database_type = parse_database_type(database_type)?;
@@ -26,5 +27,5 @@ pub fn backup_project_database(
             ))
         })?;
 
-    database_provisioner.backup_project_database(&profile)
+    database_provisioner.backup_project_database(&profile, options.unwrap_or_default())
 }

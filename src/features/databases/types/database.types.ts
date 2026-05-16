@@ -2,6 +2,8 @@ export type DatabaseType = "mysql" | "postgresql";
 
 export type DatabaseProvisioningStatus = "failed" | "pending" | "ready";
 export type ManagedDatabaseDependencyStatus = "installed" | "pending";
+export type DatabaseBackupCompression = "gzip" | "none";
+export type DatabaseBackupEncryption = "aes256Gcm" | "none";
 
 export interface ProjectDatabaseProfile {
   readonly projectId: string;
@@ -65,6 +67,13 @@ export interface DatabaseBackupResult {
   readonly projectId: string;
   readonly databaseType: DatabaseType;
   readonly backupPath: string;
+  readonly metadataPath?: string | null;
+  readonly compression: DatabaseBackupCompression;
+  readonly encryption: DatabaseBackupEncryption;
+  readonly compressed: boolean;
+  readonly encrypted: boolean;
+  readonly sizeBytes: number;
+  readonly prunedBackupPaths: string[];
   readonly statusMessage: string;
 }
 
@@ -72,6 +81,50 @@ export interface DatabaseRestoreResult {
   readonly projectId: string;
   readonly databaseType: DatabaseType;
   readonly backupPath: string;
+  readonly restoredFromPath: string;
+  readonly decrypted: boolean;
+  readonly decompressed: boolean;
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupOptions {
+  readonly compression: DatabaseBackupCompression;
+  readonly encryption: DatabaseBackupEncryption;
+  readonly retentionDays: number;
+}
+
+export interface DatabaseBackupPolicy {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly enabled: boolean;
+  readonly intervalMinutes: number;
+  readonly retentionDays: number;
+  readonly compression: DatabaseBackupCompression;
+  readonly encryption: DatabaseBackupEncryption;
+  readonly lastRunAt?: string | null;
+  readonly nextRunAt?: string | null;
+  readonly updatedAt: string;
+}
+
+export interface DatabaseBackupPolicyUpdate {
+  readonly enabled: boolean;
+  readonly intervalMinutes: number;
+  readonly retentionDays: number;
+  readonly compression: DatabaseBackupCompression;
+  readonly encryption: DatabaseBackupEncryption;
+}
+
+export interface DatabaseBackupPolicyUpdateResult {
+  readonly policy: DatabaseBackupPolicy;
+  readonly statusMessage: string;
+}
+
+export interface ScheduledDatabaseBackupRunResult {
+  readonly checkedPolicies: number;
+  readonly completedBackups: number;
+  readonly skippedBackups: number;
+  readonly backups: DatabaseBackupResult[];
+  readonly errors: string[];
   readonly statusMessage: string;
 }
 

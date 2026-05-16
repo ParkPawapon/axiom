@@ -1,3 +1,4 @@
+pub mod backup_artifacts;
 pub mod database_cli;
 pub mod database_identifiers;
 pub mod database_paths;

@@ -1,5 +1,6 @@
 pub mod audit_logger;
 pub mod certificate_manager;
+pub mod database_backup_policy_repository;
 pub mod database_dependency_manager;
 pub mod database_provisioner;
 pub mod database_provisioning_repository;

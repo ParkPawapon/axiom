@@ -1,5 +1,5 @@
 use crate::domain::database::database_config::{
-    DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
     DatabaseProvisioningResult, DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
@@ -17,6 +17,7 @@ pub trait DatabaseProvisioner: Send + Sync {
     fn backup_project_database(
         &self,
         profile: &ProjectDatabaseProfile,
+        options: DatabaseBackupOptions,
     ) -> AppResult<DatabaseBackupResult>;
 
     fn restore_project_database(
