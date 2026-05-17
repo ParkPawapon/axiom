@@ -1,6 +1,6 @@
 # Security Architecture
 
-AxiomPHP is designed as a secure desktop utility for local PHP development workflows. The repository now includes safe passive probes and explicit PHP package-manager installation, while project process supervision and service lifecycle control remain behind future boundaries.
+AxiomPHP is designed as a secure desktop utility for local PHP development workflows. The repository now includes explicit PHP package-manager installation, project PHP process supervision, service lifecycle controls, project-scoped Docker Compose orchestration, managed database provisioning, security controls, and backup/restore orchestration behind Clean Architecture boundaries.
 
 ## Trust Boundaries
 
@@ -23,6 +23,15 @@ Package-manager installation is constrained by these rules:
 - `CommandRunner` allows only the resolved Homebrew or Scoop executable path.
 - Commands have fixed arguments, timeouts, and output limits.
 - Failed installs do not update the project PHP selection.
+
+Docker orchestration is constrained by these rules:
+
+- The frontend sends only a persisted project ID and user intent.
+- Backend use cases load the project and selected PHP version from repositories.
+- Compose files are generated into an app-owned runtime directory.
+- The project document root is validated as an existing absolute directory before being bound into Compose.
+- Docker commands use a resolved Docker executable path and fixed backend-owned arguments.
+- Each project uses a deterministic Compose project name, so start/stop/restart does not target unrelated projects.
 
 ## Validation Policy
 

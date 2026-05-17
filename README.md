@@ -2,7 +2,7 @@
 
 AxiomPHP is a production-oriented desktop application foundation for a modern local PHP development control center. The long-term goal is to provide a safer, cleaner replacement for XAMPP-style workflows while keeping services, projects, credentials, and operating-system actions behind explicit boundaries.
 
-Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, managed database provisioning, security controls, and backup/restore orchestration are available behind Rust application use cases and infrastructure ports.
+Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, project-scoped Docker Compose orchestration, managed database provisioning, security controls, and backup/restore orchestration are available behind Rust application use cases and infrastructure ports.
 
 ## Problem Statement
 
@@ -40,6 +40,7 @@ Future implementation must keep Rust as the security boundary between UI intent 
 - Validate ports, service names, project names, and environment variable keys.
 - Avoid unsafe shell execution and shell string concatenation.
 - Route all process execution through the command runner abstraction.
+- Route Docker execution through project-scoped backend use cases and an allowlisted Docker CLI boundary.
 - Run package-manager installation only after explicit frontend confirmation.
 - Keep package-manager command arguments backend-owned and version-catalog based.
 - Keep backup encryption and signing keys in secure storage or explicit external key environment variables.
@@ -60,6 +61,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 
 - Project-based PHP environment configuration
 - Project process switching and runtime supervision
+- Project-scoped Docker database, reverse proxy, and volume profiles
 - Cloud remote backup providers
 - Continuous WAL/binlog point-in-time recovery
 - External KMS-backed backup keys
@@ -113,5 +115,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 ```
 
 ## Not Implemented Yet
+
+The Docker layer now supports per-project Compose file generation in the app-owned runtime directory and start/stop/restart/status actions through the Rust Docker CLI boundary. Docker Desktop must be installed and running to exercise this flow; if Docker data was deleted, Docker Desktop needs to recreate its engine state before project Compose actions can succeed.
 
 The backup/restore layer now supports managed artifacts, file picker restore, scheduled policies, OS scheduler installation, mounted remote destinations, point-in-time snapshot restore, migration rollback files, retention, compression, encryption, and HMAC signing. It does not yet provide cloud-native backup destinations, continuous database-log replay recovery, automatic rollback SQL generation, external KMS integration, or cross-machine artifact trust enrollment.

@@ -29,7 +29,8 @@ Prepare a production-safe contribution track for PHP runtime, database, reverse 
 - MySQL lifecycle uses allowlisted Homebrew launchd labels on macOS and known Windows service names on Windows.
 - PostgreSQL lifecycle uses allowlisted Homebrew launchd labels on macOS and known Windows service names on Windows.
 - Reverse proxy lifecycle uses allowlisted Caddy or Nginx launchd labels on macOS and known Windows service names on Windows.
-- Docker lifecycle uses Docker CLI diagnostics, Docker Compose project visibility, optional `AXIOM_DOCKER_COMPOSE_FILE` up/down orchestration, Docker Desktop start/shutdown helpers on macOS, and Windows service control on Windows.
+- Docker lifecycle uses Docker CLI diagnostics, Docker Compose project visibility, optional `AXIOM_DOCKER_COMPOSE_FILE` up/down orchestration for legacy global checks, Docker Desktop start/shutdown helpers on macOS, and Windows service control on Windows.
+- Project Docker lifecycle is now separate from global service lifecycle. It generates a per-project Compose file from persisted project metadata and runs `docker compose` with a project-specific name through the Rust Docker boundary.
 - Lifecycle requests return blocked outcomes when a supported service label, plist, Windows service, Docker Desktop helper, or Docker CLI boundary is not configured.
 - The Services screen calls the backend for inventory and status checks instead of rendering static placeholders.
 
@@ -38,6 +39,5 @@ Prepare a production-safe contribution track for PHP runtime, database, reverse 
 - Global PHP runtime lifecycle. PHP remains project-process scoped.
 - Database credential creation and rotation.
 - Database data directory provisioning.
-- Docker Compose file authoring for project services. The lifecycle adapter only runs an explicitly configured Compose file.
 - Host file changes.
 - Certificate generation.
