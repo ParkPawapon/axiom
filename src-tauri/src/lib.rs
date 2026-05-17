@@ -7,6 +7,10 @@ pub mod platform;
 pub mod ports;
 pub mod shared;
 
+use crate::application::databases::run_due_database_backups_use_case;
+use crate::domain::database::database_config::ScheduledDatabaseBackupRunResult;
+use crate::shared::result::app_result::AppResult;
+
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
 
@@ -42,11 +46,18 @@ pub fn run() {
             commands::database_commands::list_project_database_profiles,
             commands::database_commands::provision_project_database,
             commands::database_commands::backup_project_database,
+            commands::database_commands::list_database_backup_destinations,
             commands::database_commands::list_database_backup_policies,
+            commands::database_commands::update_database_backup_destination,
             commands::database_commands::update_database_backup_policy,
             commands::database_commands::run_due_database_backups,
+            commands::database_commands::get_database_backup_scheduler_status,
+            commands::database_commands::install_database_backup_scheduler,
+            commands::database_commands::uninstall_database_backup_scheduler,
             commands::database_commands::restore_project_database,
+            commands::database_commands::restore_project_database_to_point_in_time,
             commands::database_commands::create_project_database_migration,
+            commands::database_commands::rollback_project_database_migrations,
             commands::database_commands::run_project_database_migrations,
             commands::log_commands::read_project_logs,
             commands::security_commands::get_security_status,
@@ -66,4 +77,26 @@ pub fn run() {
     if let Err(error) = builder.run(tauri::generate_context!()) {
         tracing::error!(?error, "failed to run AxiomPHP desktop application");
     }
+}
+
+pub fn run_due_database_backups_once() -> AppResult<ScheduledDatabaseBackupRunResult> {
+    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+    let state = bootstrap::app_state::AppState::new()?;
+
+    let result = run_due_database_backups_use_case::run_due_database_backups(
+        state.database_backup_policy_repository(),
+        state.database_backup_destination_repository(),
+        state.database_provisioning_repository(),
+        state.database_provisioner(),
+    )?;
+
+    tracing::info!(
+        checked_policies = result.checked_policies,
+        completed_backups = result.completed_backups,
+        skipped_backups = result.skipped_backups,
+        errors = result.errors.len(),
+        "scheduled database backup CLI sweep completed"
+    );
+
+    Ok(result)
 }
