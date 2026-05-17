@@ -2,6 +2,8 @@ use tauri::State;
 
 use crate::application::projects::create_project_use_case;
 use crate::application::projects::delete_project_use_case;
+use crate::application::projects::generate_project_docker_compose_use_case;
+use crate::application::projects::get_project_docker_status_use_case;
 use crate::application::projects::get_project_php_process_status_use_case;
 use crate::application::projects::get_project_php_version_use_case;
 use crate::application::projects::get_project_use_case;
@@ -10,14 +12,18 @@ use crate::application::projects::list_projects_use_case;
 use crate::application::projects::project_php_process_batch_use_case;
 use crate::application::projects::project_php_process_batch_use_case::ProjectPhpProcessActionResult;
 use crate::application::projects::request_project_php_install_use_case;
+use crate::application::projects::restart_project_docker_use_case;
 use crate::application::projects::restart_project_php_process_use_case;
 use crate::application::projects::select_project_php_version_use_case;
+use crate::application::projects::start_project_docker_use_case;
 use crate::application::projects::start_project_php_process_use_case;
+use crate::application::projects::stop_project_docker_use_case;
 use crate::application::projects::stop_project_php_process_use_case;
 use crate::application::projects::update_project_use_case;
 use crate::application::projects::validate_project_path_use_case;
 use crate::bootstrap::app_state::AppState;
 use crate::domain::project::project::Project;
+use crate::domain::project::project_docker::{ProjectDockerActionResult, ProjectDockerStatus};
 use crate::domain::project::project_path::ProjectPath;
 use crate::domain::project::project_php_version::{
     ProjectPhpInstallPlan, ProjectPhpInstallResult, ProjectPhpVersionConfig,
@@ -280,6 +286,89 @@ pub fn restart_project_php_processes(
     )
     .map_err(|error| {
         tracing::warn!(?error, "project PHP process batch restart command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn generate_project_docker_compose(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectDockerActionResult, CommandErrorPayload> {
+    generate_project_docker_compose_use_case::generate_project_docker_compose(
+        state.project_repository(),
+        state.project_runtime_repository(),
+        state.docker_client(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project Docker Compose generation command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn get_project_docker_status(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectDockerStatus, CommandErrorPayload> {
+    get_project_docker_status_use_case::get_project_docker_status(
+        state.project_repository(),
+        state.docker_client(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project Docker status command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn start_project_docker(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectDockerActionResult, CommandErrorPayload> {
+    start_project_docker_use_case::start_project_docker(
+        state.project_repository(),
+        state.project_runtime_repository(),
+        state.docker_client(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project Docker start command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn stop_project_docker(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectDockerActionResult, CommandErrorPayload> {
+    stop_project_docker_use_case::stop_project_docker(
+        state.project_repository(),
+        state.docker_client(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project Docker stop command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn restart_project_docker(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectDockerActionResult, CommandErrorPayload> {
+    restart_project_docker_use_case::restart_project_docker(
+        state.project_repository(),
+        state.project_runtime_repository(),
+        state.docker_client(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project Docker restart command failed");
         map_command_error(&error)
     })
 }

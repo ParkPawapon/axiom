@@ -6,6 +6,7 @@ use crate::infrastructure::databases::local_database_provisioner::LocalDatabaseP
 use crate::infrastructure::databases::managed_backup_catalog::ManagedDatabaseBackupCatalog;
 use crate::infrastructure::databases::managed_database_dependency_manager::ManagedDatabaseDependencyManager;
 use crate::infrastructure::databases::os_backup_scheduler::OsDatabaseBackupScheduler;
+use crate::infrastructure::docker::docker_cli_client::DockerCliClient;
 use crate::infrastructure::logging::file_audit_logger::FileAuditLogger;
 use crate::infrastructure::logging::file_log_reader::FileLogReader;
 use crate::infrastructure::networking::hosts_file_adapter::HostsFileAdapter;
@@ -29,6 +30,7 @@ use crate::ports::database_backup_scheduler::DatabaseBackupScheduler;
 use crate::ports::database_dependency_manager::DatabaseDependencyManager;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
+use crate::ports::docker_client::DockerClient;
 use crate::ports::hosts_file_manager::HostsFileManager;
 use crate::ports::log_reader::LogReader;
 use crate::ports::permission_manager::PermissionManager;
@@ -53,6 +55,7 @@ pub struct AppState {
     database_dependency_manager: Arc<dyn DatabaseDependencyManager>,
     database_provisioner: Arc<dyn DatabaseProvisioner>,
     database_provisioning_repository: Arc<dyn DatabaseProvisioningRepository>,
+    docker_client: Arc<dyn DockerClient>,
     hosts_file_manager: Arc<dyn HostsFileManager>,
     log_reader: Arc<dyn LogReader>,
     permission_manager: Arc<dyn PermissionManager>,
@@ -94,6 +97,7 @@ impl AppState {
             database_dependency_manager,
             database_provisioner,
             database_provisioning_repository,
+            docker_client: Arc::new(DockerCliClient::new()),
             hosts_file_manager: Arc::new(HostsFileAdapter::new()?),
             log_reader: Arc::new(FileLogReader::new()?),
             permission_manager: Arc::new(LocalPermissionManager::new()?),
@@ -146,6 +150,10 @@ impl AppState {
 
     pub fn database_provisioning_repository(&self) -> &dyn DatabaseProvisioningRepository {
         self.database_provisioning_repository.as_ref()
+    }
+
+    pub fn docker_client(&self) -> &dyn DockerClient {
+        self.docker_client.as_ref()
     }
 
     pub fn hosts_file_manager(&self) -> &dyn HostsFileManager {
