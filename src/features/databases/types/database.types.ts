@@ -68,12 +68,14 @@ export interface DatabaseBackupResult {
   readonly databaseType: DatabaseType;
   readonly backupPath: string;
   readonly metadataPath?: string | null;
+  readonly signaturePath?: string | null;
   readonly compression: DatabaseBackupCompression;
   readonly encryption: DatabaseBackupEncryption;
   readonly compressed: boolean;
   readonly encrypted: boolean;
   readonly sizeBytes: number;
   readonly prunedBackupPaths: string[];
+  readonly remoteCopyPaths: string[];
   readonly statusMessage: string;
 }
 
@@ -84,6 +86,7 @@ export interface DatabaseRestoreResult {
   readonly restoredFromPath: string;
   readonly decrypted: boolean;
   readonly decompressed: boolean;
+  readonly signatureVerified: boolean;
   readonly statusMessage: string;
 }
 
@@ -119,6 +122,38 @@ export interface DatabaseBackupPolicyUpdateResult {
   readonly statusMessage: string;
 }
 
+export interface DatabaseBackupRemoteDestination {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly enabled: boolean;
+  readonly destinationPath: string;
+  readonly updatedAt: string;
+}
+
+export interface DatabaseBackupRemoteDestinationUpdate {
+  readonly enabled: boolean;
+  readonly destinationPath: string;
+}
+
+export interface DatabaseBackupRemoteDestinationUpdateResult {
+  readonly destination: DatabaseBackupRemoteDestination;
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupSchedulerStatus {
+  readonly installed: boolean;
+  readonly platform: string;
+  readonly scheduleLabel: string;
+  readonly manifestPath?: string | null;
+  readonly lastCheckedAt: string;
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupSchedulerInstallResult {
+  readonly status: DatabaseBackupSchedulerStatus;
+  readonly statusMessage: string;
+}
+
 export interface ScheduledDatabaseBackupRunResult {
   readonly checkedPolicies: number;
   readonly completedBackups: number;
@@ -132,6 +167,7 @@ export interface DatabaseMigrationFile {
   readonly projectId: string;
   readonly databaseType: DatabaseType;
   readonly migrationPath: string;
+  readonly rollbackPath?: string | null;
   readonly statusMessage: string;
 }
 
@@ -139,5 +175,22 @@ export interface DatabaseMigrationRunResult {
   readonly projectId: string;
   readonly databaseType: DatabaseType;
   readonly appliedMigrations: string[];
+  readonly statusMessage: string;
+}
+
+export interface DatabaseMigrationRollbackResult {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly rolledBackMigrations: string[];
+  readonly statusMessage: string;
+}
+
+export interface DatabasePointInTimeRestoreResult {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly targetTime: string;
+  readonly selectedBackupPath: string;
+  readonly selectedBackupCreatedAt: string;
+  readonly restore: DatabaseRestoreResult;
   readonly statusMessage: string;
 }

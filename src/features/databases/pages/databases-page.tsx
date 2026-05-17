@@ -17,13 +17,20 @@ import type { ManagedService } from "../../services/types/service.types";
 import {
   backupProjectDatabase,
   createProjectDatabaseMigration,
+  getDatabaseBackupSchedulerStatus,
+  installDatabaseBackupScheduler,
+  listDatabaseBackupDestinations,
   listDatabaseBackupPolicies,
   listProjectDatabaseProfiles,
   provisionProjectDatabase,
+  restoreProjectDatabaseToPointInTime,
   restoreProjectDatabase,
+  rollbackProjectDatabaseMigrations,
   runDueDatabaseBackups,
   runProjectDatabaseMigrations,
+  uninstallDatabaseBackupScheduler,
   updateDatabaseBackupPolicy,
+  updateDatabaseBackupDestination,
 } from "../api/database.commands";
 import { DatabaseBackupControls } from "../components/database-backup-controls";
 import { DatabaseServiceCard } from "../components/database-service-card";
@@ -34,6 +41,9 @@ import type {
   DatabaseBackupOptions,
   DatabaseBackupPolicy,
   DatabaseBackupPolicyUpdate,
+  DatabaseBackupRemoteDestination,
+  DatabaseBackupRemoteDestinationUpdate,
+  DatabaseBackupSchedulerStatus,
   DatabaseType,
   ManagedDatabaseDependencyStatus,
   ManagedDatabasePackage,
@@ -45,11 +55,18 @@ const databaseTypes = ["mysql", "postgresql"] as const satisfies readonly Databa
 type ActionName =
   | "backup"
   | "migration:create"
+  | "migration:rollback"
   | "migration:run"
   | "provision"
+  | "remote:save"
+  | "restore:pitr"
   | "restore"
   | "schedule:save";
-type ActionKey = `${ActionName}:${DatabaseType}` | "schedule:runDue";
+type ActionKey =
+  | `${ActionName}:${DatabaseType}`
+  | "schedule:runDue"
+  | "scheduler:install"
+  | "scheduler:uninstall";
 
 const defaultBackupOptions: DatabaseBackupOptions = {
   compression: "gzip",
@@ -61,6 +78,11 @@ const defaultPolicyInput: DatabaseBackupPolicyUpdate = {
   ...defaultBackupOptions,
   enabled: false,
   intervalMinutes: 1440,
+};
+
+const defaultRemoteDestinationInput: DatabaseBackupRemoteDestinationUpdate = {
+  destinationPath: "",
+  enabled: false,
 };
 
 export function DatabasesPage() {
@@ -75,11 +97,18 @@ export function DatabasesPage() {
   const [backupPolicies, setBackupPolicies] = useState<
     Partial<Record<DatabaseType, DatabaseBackupPolicy>>
   >({});
+  const [backupDestinations, setBackupDestinations] = useState<
+    Partial<Record<DatabaseType, DatabaseBackupRemoteDestination>>
+  >({});
   const [migrationNames, setMigrationNames] = useState<Record<DatabaseType, string>>({
     mysql: "",
     postgresql: "",
   });
   const [noticeMessage, setNoticeMessage] = useState<string>();
+  const [pointInTimeTargets, setPointInTimeTargets] = useState<Record<DatabaseType, string>>({
+    mysql: "",
+    postgresql: "",
+  });
   const [profiles, setProfiles] = useState<ProjectDatabaseProfile[]>([]);
   const [provisioningResults, setProvisioningResults] = useState<
     Partial<Record<DatabaseType, DatabaseProvisioningResult>>
@@ -88,6 +117,17 @@ export function DatabasesPage() {
   const [restorePaths, setRestorePaths] = useState<Record<DatabaseType, string>>({
     mysql: "",
     postgresql: "",
+  });
+  const [rollbackSteps, setRollbackSteps] = useState<Record<DatabaseType, number>>({
+    mysql: 1,
+    postgresql: 1,
+  });
+  const [schedulerStatus, setSchedulerStatus] = useState<DatabaseBackupSchedulerStatus>();
+  const [remoteDestinationInputs, setRemoteDestinationInputs] = useState<
+    Record<DatabaseType, DatabaseBackupRemoteDestinationUpdate>
+  >({
+    mysql: defaultRemoteDestinationInput,
+    postgresql: defaultRemoteDestinationInput,
   });
   const [scheduleInputs, setScheduleInputs] = useState<
     Record<DatabaseType, DatabaseBackupPolicyUpdate>
@@ -161,14 +201,56 @@ export function DatabasesPage() {
     }
   }, []);
 
+  const loadBackupDestinations = useCallback(async (projectId: string) => {
+    if (!projectId) {
+      setBackupDestinations({});
+      return;
+    }
+
+    try {
+      const destinations = await listDatabaseBackupDestinations(projectId);
+      const destinationsByType = destinations.reduce<
+        Partial<Record<DatabaseType, DatabaseBackupRemoteDestination>>
+      >((currentDestinations, destination) => {
+        currentDestinations[destination.databaseType] = destination;
+        return currentDestinations;
+      }, {});
+
+      setBackupDestinations(destinationsByType);
+      setRemoteDestinationInputs((currentInputs) => ({
+        mysql: remoteDestinationInputFromDestination(destinationsByType.mysql, currentInputs.mysql),
+        postgresql: remoteDestinationInputFromDestination(
+          destinationsByType.postgresql,
+          currentInputs.postgresql,
+        ),
+      }));
+    } catch (error) {
+      setErrorMessage(
+        getErrorMessage(error, "Database backup destinations could not be loaded safely."),
+      );
+    }
+  }, []);
+
+  const loadSchedulerStatus = useCallback(async () => {
+    try {
+      setSchedulerStatus(await getDatabaseBackupSchedulerStatus());
+    } catch (error) {
+      setErrorMessage(
+        getErrorMessage(error, "Database backup scheduler status could not be loaded safely."),
+      );
+    }
+  }, []);
+
   useEffect(() => {
     void loadInventory();
-  }, [loadInventory]);
+    void loadSchedulerStatus();
+  }, [loadInventory, loadSchedulerStatus]);
 
   useEffect(() => {
     void loadProfiles(selectedProjectId);
     void loadBackupPolicies(selectedProjectId);
-  }, [loadBackupPolicies, loadProfiles, selectedProjectId]);
+    void loadBackupDestinations(selectedProjectId);
+  }, [loadBackupDestinations, loadBackupPolicies, loadProfiles, selectedProjectId]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -187,6 +269,7 @@ export function DatabasesPage() {
             await Promise.all([
               loadProfiles(selectedProjectId),
               loadBackupPolicies(selectedProjectId),
+              loadBackupDestinations(selectedProjectId),
             ]);
           }
 
@@ -202,7 +285,7 @@ export function DatabasesPage() {
     }, 60_000);
 
     return () => window.clearInterval(intervalId);
-  }, [actionKey, loadBackupPolicies, loadProfiles, selectedProjectId]);
+  }, [actionKey, loadBackupDestinations, loadBackupPolicies, loadProfiles, selectedProjectId]);
 
   const databaseServices = useMemo(
     () =>
@@ -237,13 +320,21 @@ export function DatabasesPage() {
         setNoticeMessage(message);
         await loadProfiles(selectedProjectId);
         await loadBackupPolicies(selectedProjectId);
+        await loadBackupDestinations(selectedProjectId);
+        await loadSchedulerStatus();
       } catch (error) {
         setErrorMessage(getErrorMessage(error, "Database action failed safely."));
       } finally {
         setActionKey(undefined);
       }
     },
-    [loadBackupPolicies, loadProfiles, selectedProjectId],
+    [
+      loadBackupDestinations,
+      loadBackupPolicies,
+      loadProfiles,
+      loadSchedulerStatus,
+      selectedProjectId,
+    ],
   );
 
   const provisionDatabase = (databaseType: DatabaseType) => {
@@ -277,6 +368,10 @@ export function DatabasesPage() {
         result.backupPath,
         result.encrypted ? "Encrypted" : "Not encrypted",
         result.compressed ? "Compressed" : "Not compressed",
+        result.signaturePath ? "Signed" : "Unsigned",
+        result.remoteCopyPaths.length > 0
+          ? `Copied to ${result.remoteCopyPaths.length} remote artifact(s).`
+          : undefined,
         result.prunedBackupPaths.length > 0
           ? `Pruned ${result.prunedBackupPaths.length} expired artifact(s).`
           : undefined,
@@ -328,6 +423,36 @@ export function DatabasesPage() {
         `Source: ${result.restoredFromPath}`,
         result.decrypted ? "Decrypted" : undefined,
         result.decompressed ? "Decompressed" : undefined,
+        result.signatureVerified ? "Signature verified" : "No signature verified",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    });
+  };
+
+  const restorePointInTime = (databaseType: DatabaseType) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    const targetTime = pointInTimeTargetToIso(pointInTimeTargets[databaseType]);
+    if (!targetTime) {
+      setErrorMessage("Point-in-time restore target is required.");
+      return;
+    }
+
+    void runAction(`restore:pitr:${databaseType}`, async () => {
+      const result = await restoreProjectDatabaseToPointInTime(
+        selectedProjectId,
+        databaseType,
+        targetTime,
+      );
+
+      return [
+        result.statusMessage,
+        `Selected backup: ${result.selectedBackupPath}`,
+        `Backup created: ${formatDate(result.selectedBackupCreatedAt)}`,
+        result.restore.signatureVerified ? "Signature verified" : "No signature verified",
       ]
         .filter(Boolean)
         .join(" ");
@@ -352,10 +477,42 @@ export function DatabasesPage() {
     });
   };
 
+  const saveBackupDestination = (databaseType: DatabaseType) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    void runAction(`remote:save:${databaseType}`, async () => {
+      const result = await updateDatabaseBackupDestination(
+        selectedProjectId,
+        databaseType,
+        remoteDestinationInputs[databaseType],
+      );
+
+      return result.statusMessage;
+    });
+  };
+
   const runScheduledBackups = () => {
     void runAction("schedule:runDue", async () => {
       const result = await runDueDatabaseBackups();
       return scheduledBackupNotice(result);
+    });
+  };
+
+  const installScheduler = () => {
+    void runAction("scheduler:install", async () => {
+      const result = await installDatabaseBackupScheduler();
+      setSchedulerStatus(result.status);
+      return result.statusMessage;
+    });
+  };
+
+  const uninstallScheduler = () => {
+    void runAction("scheduler:uninstall", async () => {
+      const result = await uninstallDatabaseBackupScheduler();
+      setSchedulerStatus(result.status);
+      return result.statusMessage;
     });
   };
 
@@ -384,6 +541,29 @@ export function DatabasesPage() {
     void runAction(`migration:run:${databaseType}`, async () => {
       const result = await runProjectDatabaseMigrations(selectedProjectId, databaseType);
       return result.statusMessage;
+    });
+  };
+
+  const rollbackMigrations = (databaseType: DatabaseType) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    void runAction(`migration:rollback:${databaseType}`, async () => {
+      const result = await rollbackProjectDatabaseMigrations(
+        selectedProjectId,
+        databaseType,
+        rollbackSteps[databaseType],
+      );
+
+      return [
+        result.statusMessage,
+        result.rolledBackMigrations.length > 0
+          ? `Rolled back: ${result.rolledBackMigrations.join(", ")}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
     });
   };
 
@@ -443,7 +623,27 @@ export function DatabasesPage() {
           >
             Run due backups
           </Button>
+          <Button
+            disabled={actionKey === "scheduler:install"}
+            onClick={installScheduler}
+            variant="secondary"
+          >
+            Install OS scheduler
+          </Button>
+          <Button
+            disabled={!schedulerStatus?.installed || actionKey === "scheduler:uninstall"}
+            onClick={uninstallScheduler}
+            variant="secondary"
+          >
+            Remove OS scheduler
+          </Button>
         </div>
+        {schedulerStatus ? (
+          <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
+            {schedulerStatus.statusMessage}
+            {schedulerStatus.manifestPath ? ` Manifest: ${schedulerStatus.manifestPath}` : ""}
+          </p>
+        ) : null}
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
@@ -627,7 +827,10 @@ export function DatabasesPage() {
                 backupOptions={backupOptions[databaseType]}
                 databaseType={databaseType}
                 policy={scheduleInputs[databaseType]}
+                pointInTimeTarget={pointInTimeTargets[databaseType]}
                 ready={ready}
+                remoteDestination={remoteDestinationInputs[databaseType]}
+                rollbackSteps={rollbackSteps[databaseType]}
                 restorePath={restorePaths[databaseType]}
                 onBackup={() => backupDatabase(databaseType)}
                 onBackupOptionsChange={(options) =>
@@ -643,9 +846,36 @@ export function DatabasesPage() {
                     [databaseType]: policy,
                   }))
                 }
+                onPointInTimeRestore={() => restorePointInTime(databaseType)}
+                onPointInTimeTargetChange={(target) =>
+                  setPointInTimeTargets((currentTargets) => ({
+                    ...currentTargets,
+                    [databaseType]: target,
+                  }))
+                }
+                onRemoteDestinationChange={(destination) =>
+                  setRemoteDestinationInputs((currentInputs) => ({
+                    ...currentInputs,
+                    [databaseType]: destination,
+                  }))
+                }
+                onRollbackMigrations={() => rollbackMigrations(databaseType)}
+                onRollbackStepsChange={(steps) =>
+                  setRollbackSteps((currentSteps) => ({
+                    ...currentSteps,
+                    [databaseType]: steps,
+                  }))
+                }
                 onRestore={() => restoreDatabase(databaseType)}
+                onSaveRemoteDestination={() => saveBackupDestination(databaseType)}
                 onSavePolicy={() => saveBackupPolicy(databaseType)}
               />
+
+              {backupDestinations[databaseType] ? (
+                <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
+                  {remoteDestinationStatus(backupDestinations[databaseType])}
+                </p>
+              ) : null}
 
               {backupPolicies[databaseType] ? (
                 <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
@@ -809,6 +1039,32 @@ function policyInputFromPolicy(
   };
 }
 
+function remoteDestinationInputFromDestination(
+  destination: DatabaseBackupRemoteDestination | undefined,
+  fallback: DatabaseBackupRemoteDestinationUpdate,
+): DatabaseBackupRemoteDestinationUpdate {
+  if (!destination) {
+    return fallback;
+  }
+
+  return {
+    destinationPath: destination.destinationPath,
+    enabled: destination.enabled,
+  };
+}
+
+function remoteDestinationStatus(destination: DatabaseBackupRemoteDestination | undefined) {
+  if (!destination) {
+    return "No remote backup destination saved.";
+  }
+
+  return [
+    destination.enabled ? "Remote copy enabled." : "Remote copy disabled.",
+    `Destination ${destination.destinationPath || "not set"}.`,
+    `Updated ${formatDate(destination.updatedAt)}.`,
+  ].join(" ");
+}
+
 function scheduleStatus(policy: DatabaseBackupPolicy | undefined) {
   if (!policy) {
     return "No scheduled backup policy saved.";
@@ -835,4 +1091,17 @@ function scheduledBackupNotice(result: {
   return [result.statusMessage, result.errors.length > 0 ? result.errors.join(" ") : undefined]
     .filter(Boolean)
     .join(" ");
+}
+
+function pointInTimeTargetToIso(value: string) {
+  if (!value.trim()) {
+    return undefined;
+  }
+
+  const target = new Date(value);
+  if (Number.isNaN(target.getTime())) {
+    return undefined;
+  }
+
+  return target.toISOString();
 }
