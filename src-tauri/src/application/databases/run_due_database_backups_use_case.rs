@@ -3,6 +3,8 @@ use chrono::{Duration, Utc};
 use crate::domain::database::database_config::{
     DatabaseBackupPolicy, ScheduledDatabaseBackupRunResult,
 };
+use crate::infrastructure::databases::remote_backup_destination::copy_backup_to_remote_destination;
+use crate::ports::database_backup_destination_repository::DatabaseBackupDestinationRepository;
 use crate::ports::database_backup_policy_repository::DatabaseBackupPolicyRepository;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
@@ -10,6 +12,7 @@ use crate::shared::result::app_result::AppResult;
 
 pub fn run_due_database_backups(
     backup_policy_repository: &dyn DatabaseBackupPolicyRepository,
+    backup_destination_repository: &dyn DatabaseBackupDestinationRepository,
     database_repository: &dyn DatabaseProvisioningRepository,
     database_provisioner: &dyn DatabaseProvisioner,
 ) -> AppResult<ScheduledDatabaseBackupRunResult> {
@@ -32,6 +35,7 @@ pub fn run_due_database_backups(
 
         match run_policy_backup(
             backup_policy_repository,
+            backup_destination_repository,
             database_repository,
             database_provisioner,
             policy,
@@ -62,6 +66,7 @@ pub fn run_due_database_backups(
 
 fn run_policy_backup(
     backup_policy_repository: &dyn DatabaseBackupPolicyRepository,
+    backup_destination_repository: &dyn DatabaseBackupDestinationRepository,
     database_repository: &dyn DatabaseProvisioningRepository,
     database_provisioner: &dyn DatabaseProvisioner,
     mut policy: DatabaseBackupPolicy,
@@ -72,7 +77,14 @@ fn run_policy_backup(
     else {
         return Ok(None);
     };
-    let backup = database_provisioner.backup_project_database(&profile, policy.backup_options())?;
+    let mut backup =
+        database_provisioner.backup_project_database(&profile, policy.backup_options())?;
+
+    if let Some(destination) =
+        backup_destination_repository.get_destination(&policy.project_id, policy.database_type)?
+    {
+        backup.remote_copy_paths = copy_backup_to_remote_destination(&backup, &destination)?;
+    }
 
     policy.last_run_at = Some(now);
     policy.next_run_at = Some(now + Duration::minutes(i64::from(policy.interval_minutes)));

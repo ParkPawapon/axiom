@@ -4,6 +4,7 @@ import { Select } from "../../../shared/components/ui/select";
 import type {
   DatabaseBackupOptions,
   DatabaseBackupPolicyUpdate,
+  DatabaseBackupRemoteDestinationUpdate,
   DatabaseType,
 } from "../types/database.types";
 
@@ -12,13 +13,22 @@ interface DatabaseBackupControlsProps {
   backupOptions: DatabaseBackupOptions;
   databaseType: DatabaseType;
   policy: DatabaseBackupPolicyUpdate;
+  pointInTimeTarget: string;
   ready: boolean;
+  remoteDestination: DatabaseBackupRemoteDestinationUpdate;
+  rollbackSteps: number;
   restorePath: string;
   onBackup: () => void;
   onBackupOptionsChange: (options: DatabaseBackupOptions) => void;
   onPickRestorePath: () => void;
   onPolicyChange: (policy: DatabaseBackupPolicyUpdate) => void;
+  onPointInTimeRestore: () => void;
+  onRemoteDestinationChange: (destination: DatabaseBackupRemoteDestinationUpdate) => void;
+  onRollbackMigrations: () => void;
+  onRollbackStepsChange: (steps: number) => void;
   onRestore: () => void;
+  onPointInTimeTargetChange: (target: string) => void;
+  onSaveRemoteDestination: () => void;
   onSavePolicy: () => void;
 }
 
@@ -30,10 +40,19 @@ export function DatabaseBackupControls({
   onBackupOptionsChange,
   onPickRestorePath,
   onPolicyChange,
+  onPointInTimeRestore,
+  onPointInTimeTargetChange,
+  onRemoteDestinationChange,
+  onRollbackMigrations,
+  onRollbackStepsChange,
   onRestore,
+  onSaveRemoteDestination,
   onSavePolicy,
   policy,
+  pointInTimeTarget,
   ready,
+  remoteDestination,
+  rollbackSteps,
   restorePath,
 }: DatabaseBackupControlsProps) {
   return (
@@ -122,6 +141,63 @@ export function DatabaseBackupControls({
       ) : null}
 
       <div className="grid gap-3 border-t border-voicebox-border pt-3">
+        <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
+          Point-in-time target
+          <Input
+            type="datetime-local"
+            value={pointInTimeTarget}
+            onChange={(event) => onPointInTimeTargetChange(event.target.value)}
+          />
+        </label>
+        <Button
+          disabled={
+            !ready || !pointInTimeTarget.trim() || actionKey === `restore:pitr:${databaseType}`
+          }
+          onClick={onPointInTimeRestore}
+          variant="secondary"
+        >
+          Restore point in time
+        </Button>
+      </div>
+
+      <div className="grid gap-3 border-t border-voicebox-border pt-3">
+        <label className="flex items-center gap-2 text-sm font-semibold text-voicebox-black">
+          <input
+            checked={remoteDestination.enabled}
+            className="h-4 w-4 accent-voicebox-black"
+            type="checkbox"
+            onChange={(event) =>
+              onRemoteDestinationChange({
+                ...remoteDestination,
+                enabled: event.target.checked,
+              })
+            }
+          />
+          Remote destination enabled
+        </label>
+        <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
+          Mounted destination path
+          <Input
+            value={remoteDestination.destinationPath}
+            onChange={(event) =>
+              onRemoteDestinationChange({
+                ...remoteDestination,
+                destinationPath: event.target.value,
+              })
+            }
+            placeholder="/Volumes/backups/axiomphp"
+          />
+        </label>
+        <Button
+          disabled={!ready || actionKey === `remote:save:${databaseType}`}
+          onClick={onSaveRemoteDestination}
+          variant="secondary"
+        >
+          Save destination
+        </Button>
+      </div>
+
+      <div className="grid gap-3 border-t border-voicebox-border pt-3">
         <label className="flex items-center gap-2 text-sm font-semibold text-voicebox-black">
           <input
             checked={policy.enabled}
@@ -163,6 +239,26 @@ export function DatabaseBackupControls({
           variant="secondary"
         >
           Save schedule
+        </Button>
+      </div>
+
+      <div className="grid gap-3 border-t border-voicebox-border pt-3">
+        <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
+          Rollback steps
+          <Input
+            min={1}
+            max={50}
+            type="number"
+            value={rollbackSteps}
+            onChange={(event) => onRollbackStepsChange(Number(event.target.value))}
+          />
+        </label>
+        <Button
+          disabled={!ready || actionKey === `migration:rollback:${databaseType}`}
+          onClick={onRollbackMigrations}
+          variant="secondary"
+        >
+          Rollback latest migrations
         </Button>
       </div>
     </section>

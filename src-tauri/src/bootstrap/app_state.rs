@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use crate::infrastructure::certificates::local_certificate_manager::LocalCertificateManager;
 use crate::infrastructure::databases::local_database_provisioner::LocalDatabaseProvisioner;
+use crate::infrastructure::databases::managed_backup_catalog::ManagedDatabaseBackupCatalog;
 use crate::infrastructure::databases::managed_database_dependency_manager::ManagedDatabaseDependencyManager;
+use crate::infrastructure::databases::os_backup_scheduler::OsDatabaseBackupScheduler;
 use crate::infrastructure::logging::file_audit_logger::FileAuditLogger;
 use crate::infrastructure::logging::file_log_reader::FileLogReader;
 use crate::infrastructure::networking::hosts_file_adapter::HostsFileAdapter;
+use crate::infrastructure::persistence::file_database_backup_destination_repository::FileDatabaseBackupDestinationRepository;
 use crate::infrastructure::persistence::file_database_backup_policy_repository::FileDatabaseBackupPolicyRepository;
 use crate::infrastructure::persistence::file_database_provisioning_repository::FileDatabaseProvisioningRepository;
 use crate::infrastructure::persistence::file_project_repository::FileProjectRepository;
@@ -19,7 +22,10 @@ use crate::infrastructure::security::local_permission_manager::LocalPermissionMa
 use crate::infrastructure::services::local_service_manager::LocalServiceManager;
 use crate::ports::audit_logger::AuditLogger;
 use crate::ports::certificate_manager::CertificateManager;
+use crate::ports::database_backup_catalog::DatabaseBackupCatalog;
+use crate::ports::database_backup_destination_repository::DatabaseBackupDestinationRepository;
 use crate::ports::database_backup_policy_repository::DatabaseBackupPolicyRepository;
+use crate::ports::database_backup_scheduler::DatabaseBackupScheduler;
 use crate::ports::database_dependency_manager::DatabaseDependencyManager;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
@@ -40,7 +46,10 @@ pub struct AppState {
     pub app_name: &'static str,
     audit_logger: Arc<dyn AuditLogger>,
     certificate_manager: Arc<dyn CertificateManager>,
+    database_backup_catalog: Arc<dyn DatabaseBackupCatalog>,
+    database_backup_destination_repository: Arc<dyn DatabaseBackupDestinationRepository>,
     database_backup_policy_repository: Arc<dyn DatabaseBackupPolicyRepository>,
+    database_backup_scheduler: Arc<dyn DatabaseBackupScheduler>,
     database_dependency_manager: Arc<dyn DatabaseDependencyManager>,
     database_provisioner: Arc<dyn DatabaseProvisioner>,
     database_provisioning_repository: Arc<dyn DatabaseProvisioningRepository>,
@@ -70,12 +79,18 @@ impl AppState {
             Arc::new(ManagedDatabaseDependencyManager::new()) as Arc<dyn DatabaseDependencyManager>;
         let database_backup_policy_repository = Arc::new(FileDatabaseBackupPolicyRepository::new()?)
             as Arc<dyn DatabaseBackupPolicyRepository>;
+        let database_backup_destination_repository =
+            Arc::new(FileDatabaseBackupDestinationRepository::new()?)
+                as Arc<dyn DatabaseBackupDestinationRepository>;
 
         Ok(Self {
             app_name: "AxiomPHP",
             audit_logger: Arc::new(FileAuditLogger::new()?),
             certificate_manager: Arc::new(LocalCertificateManager::new()?),
+            database_backup_catalog: Arc::new(ManagedDatabaseBackupCatalog::new()),
+            database_backup_destination_repository,
             database_backup_policy_repository,
+            database_backup_scheduler: Arc::new(OsDatabaseBackupScheduler::new()?),
             database_dependency_manager,
             database_provisioner,
             database_provisioning_repository,
@@ -109,6 +124,20 @@ impl AppState {
 
     pub fn database_backup_policy_repository(&self) -> &dyn DatabaseBackupPolicyRepository {
         self.database_backup_policy_repository.as_ref()
+    }
+
+    pub fn database_backup_catalog(&self) -> &dyn DatabaseBackupCatalog {
+        self.database_backup_catalog.as_ref()
+    }
+
+    pub fn database_backup_destination_repository(
+        &self,
+    ) -> &dyn DatabaseBackupDestinationRepository {
+        self.database_backup_destination_repository.as_ref()
+    }
+
+    pub fn database_backup_scheduler(&self) -> &dyn DatabaseBackupScheduler {
+        self.database_backup_scheduler.as_ref()
     }
 
     pub fn database_dependency_manager(&self) -> &dyn DatabaseDependencyManager {

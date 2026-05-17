@@ -2,18 +2,28 @@ use tauri::State;
 
 use crate::application::databases::backup_project_database_use_case;
 use crate::application::databases::create_project_database_migration_use_case;
+use crate::application::databases::get_database_backup_scheduler_status_use_case;
+use crate::application::databases::install_database_backup_scheduler_use_case;
+use crate::application::databases::list_database_backup_destinations_use_case;
 use crate::application::databases::list_database_backup_policies_use_case;
 use crate::application::databases::list_project_database_profiles_use_case;
 use crate::application::databases::provision_project_database_use_case;
+use crate::application::databases::restore_project_database_to_point_in_time_use_case;
 use crate::application::databases::restore_project_database_use_case;
+use crate::application::databases::rollback_project_database_migrations_use_case;
 use crate::application::databases::run_due_database_backups_use_case;
 use crate::application::databases::run_project_database_migrations_use_case;
+use crate::application::databases::uninstall_database_backup_scheduler_use_case;
+use crate::application::databases::update_database_backup_destination_use_case;
 use crate::application::databases::update_database_backup_policy_use_case;
 use crate::bootstrap::app_state::AppState;
 use crate::domain::database::database_config::{
     DatabaseBackupOptions, DatabaseBackupPolicy, DatabaseBackupPolicyUpdate,
-    DatabaseBackupPolicyUpdateResult, DatabaseBackupResult, DatabaseMigrationFile,
-    DatabaseMigrationRunResult, DatabaseProvisioningResult, DatabaseRestoreResult,
+    DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
+    DatabaseBackupRemoteDestinationUpdate, DatabaseBackupRemoteDestinationUpdateResult,
+    DatabaseBackupResult, DatabaseBackupSchedulerInstallResult, DatabaseBackupSchedulerStatus,
+    DatabaseMigrationFile, DatabaseMigrationRollbackResult, DatabaseMigrationRunResult,
+    DatabasePointInTimeRestoreResult, DatabaseProvisioningResult, DatabaseRestoreResult,
     ProjectDatabaseProfile, ScheduledDatabaseBackupRunResult,
 };
 use crate::shared::error::command_error_mapper::{map_command_error, CommandErrorPayload};
@@ -64,6 +74,7 @@ pub fn backup_project_database(
 ) -> Result<DatabaseBackupResult, CommandErrorPayload> {
     backup_project_database_use_case::backup_project_database(
         state.database_provisioning_repository(),
+        state.database_backup_destination_repository(),
         state.database_provisioner(),
         &project_id,
         &database_type,
@@ -71,6 +82,41 @@ pub fn backup_project_database(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database backup command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn list_database_backup_destinations(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<DatabaseBackupRemoteDestination>, CommandErrorPayload> {
+    list_database_backup_destinations_use_case::list_database_backup_destinations(
+        state.database_backup_destination_repository(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup destination list command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn update_database_backup_destination(
+    state: State<'_, AppState>,
+    project_id: String,
+    database_type: String,
+    update: DatabaseBackupRemoteDestinationUpdate,
+) -> Result<DatabaseBackupRemoteDestinationUpdateResult, CommandErrorPayload> {
+    update_database_backup_destination_use_case::update_database_backup_destination(
+        state.database_backup_destination_repository(),
+        state.database_provisioning_repository(),
+        &project_id,
+        &database_type,
+        update,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup destination update command failed");
         map_command_error(&error)
     })
 }
@@ -116,11 +162,51 @@ pub fn run_due_database_backups(
 ) -> Result<ScheduledDatabaseBackupRunResult, CommandErrorPayload> {
     run_due_database_backups_use_case::run_due_database_backups(
         state.database_backup_policy_repository(),
+        state.database_backup_destination_repository(),
         state.database_provisioning_repository(),
         state.database_provisioner(),
     )
     .map_err(|error| {
         tracing::warn!(?error, "scheduled database backup command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn get_database_backup_scheduler_status(
+    state: State<'_, AppState>,
+) -> Result<DatabaseBackupSchedulerStatus, CommandErrorPayload> {
+    get_database_backup_scheduler_status_use_case::get_database_backup_scheduler_status(
+        state.database_backup_scheduler(),
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup scheduler status command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn install_database_backup_scheduler(
+    state: State<'_, AppState>,
+) -> Result<DatabaseBackupSchedulerInstallResult, CommandErrorPayload> {
+    install_database_backup_scheduler_use_case::install_database_backup_scheduler(
+        state.database_backup_scheduler(),
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup scheduler install command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn uninstall_database_backup_scheduler(
+    state: State<'_, AppState>,
+) -> Result<DatabaseBackupSchedulerInstallResult, CommandErrorPayload> {
+    uninstall_database_backup_scheduler_use_case::uninstall_database_backup_scheduler(
+        state.database_backup_scheduler(),
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup scheduler uninstall command failed");
         map_command_error(&error)
     })
 }
@@ -146,6 +232,27 @@ pub fn restore_project_database(
 }
 
 #[tauri::command]
+pub fn restore_project_database_to_point_in_time(
+    state: State<'_, AppState>,
+    project_id: String,
+    database_type: String,
+    target_time: String,
+) -> Result<DatabasePointInTimeRestoreResult, CommandErrorPayload> {
+    restore_project_database_to_point_in_time_use_case::restore_project_database_to_point_in_time(
+        state.database_provisioning_repository(),
+        state.database_backup_catalog(),
+        state.database_provisioner(),
+        &project_id,
+        &database_type,
+        &target_time,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database point-in-time restore command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
 pub fn create_project_database_migration(
     state: State<'_, AppState>,
     project_id: String,
@@ -161,6 +268,26 @@ pub fn create_project_database_migration(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database migration file command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn rollback_project_database_migrations(
+    state: State<'_, AppState>,
+    project_id: String,
+    database_type: String,
+    steps: u16,
+) -> Result<DatabaseMigrationRollbackResult, CommandErrorPayload> {
+    rollback_project_database_migrations_use_case::rollback_project_database_migrations(
+        state.database_provisioning_repository(),
+        state.database_provisioner(),
+        &project_id,
+        &database_type,
+        steps,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database migration rollback command failed");
         map_command_error(&error)
     })
 }

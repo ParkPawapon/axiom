@@ -4,9 +4,16 @@ import type {
   DatabaseBackupPolicy,
   DatabaseBackupPolicyUpdate,
   DatabaseBackupPolicyUpdateResult,
+  DatabaseBackupRemoteDestination,
+  DatabaseBackupRemoteDestinationUpdate,
+  DatabaseBackupRemoteDestinationUpdateResult,
   DatabaseBackupResult,
+  DatabaseBackupSchedulerInstallResult,
+  DatabaseBackupSchedulerStatus,
   DatabaseMigrationFile,
+  DatabaseMigrationRollbackResult,
   DatabaseMigrationRunResult,
+  DatabasePointInTimeRestoreResult,
   DatabaseProvisioningResult,
   DatabaseRestoreResult,
   DatabaseType,
@@ -45,6 +52,15 @@ export function listDatabaseBackupPolicies(projectId: string) {
   });
 }
 
+export function listDatabaseBackupDestinations(projectId: string) {
+  return invokeTauriCommand<DatabaseBackupRemoteDestination[]>(
+    "list_database_backup_destinations",
+    {
+      projectId,
+    },
+  );
+}
+
 export function updateDatabaseBackupPolicy(
   projectId: string,
   databaseType: DatabaseType,
@@ -57,8 +73,39 @@ export function updateDatabaseBackupPolicy(
   });
 }
 
+export function updateDatabaseBackupDestination(
+  projectId: string,
+  databaseType: DatabaseType,
+  update: DatabaseBackupRemoteDestinationUpdate,
+) {
+  return invokeTauriCommand<DatabaseBackupRemoteDestinationUpdateResult>(
+    "update_database_backup_destination",
+    {
+      databaseType,
+      projectId,
+      update,
+    },
+  );
+}
+
 export function runDueDatabaseBackups() {
   return invokeTauriCommand<ScheduledDatabaseBackupRunResult>("run_due_database_backups");
+}
+
+export function getDatabaseBackupSchedulerStatus() {
+  return invokeTauriCommand<DatabaseBackupSchedulerStatus>("get_database_backup_scheduler_status");
+}
+
+export function installDatabaseBackupScheduler() {
+  return invokeTauriCommand<DatabaseBackupSchedulerInstallResult>(
+    "install_database_backup_scheduler",
+  );
+}
+
+export function uninstallDatabaseBackupScheduler() {
+  return invokeTauriCommand<DatabaseBackupSchedulerInstallResult>(
+    "uninstall_database_backup_scheduler",
+  );
 }
 
 export function restoreProjectDatabase(
@@ -73,6 +120,21 @@ export function restoreProjectDatabase(
   });
 }
 
+export function restoreProjectDatabaseToPointInTime(
+  projectId: string,
+  databaseType: DatabaseType,
+  targetTime: string,
+) {
+  return invokeTauriCommand<DatabasePointInTimeRestoreResult>(
+    "restore_project_database_to_point_in_time",
+    {
+      databaseType,
+      projectId,
+      targetTime,
+    },
+  );
+}
+
 export function createProjectDatabaseMigration(
   projectId: string,
   databaseType: DatabaseType,
@@ -83,6 +145,21 @@ export function createProjectDatabaseMigration(
     databaseType,
     name,
   });
+}
+
+export function rollbackProjectDatabaseMigrations(
+  projectId: string,
+  databaseType: DatabaseType,
+  steps: number,
+) {
+  return invokeTauriCommand<DatabaseMigrationRollbackResult>(
+    "rollback_project_database_migrations",
+    {
+      databaseType,
+      projectId,
+      steps,
+    },
+  );
 }
 
 export function runProjectDatabaseMigrations(projectId: string, databaseType: DatabaseType) {

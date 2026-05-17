@@ -11,6 +11,8 @@ use chrono::{Duration, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::domain::database::database_config::{
@@ -23,6 +25,9 @@ use crate::shared::result::app_result::AppResult;
 
 const BACKUP_SECRET_NAMESPACE: &str = "database-backup";
 const BACKUP_ENCRYPTION_KEY: &str = "managed-backup-key";
+const BACKUP_SIGNING_KEY: &str = "managed-backup-signing-key";
+const BACKUP_ENCRYPTION_KEY_ENV: &str = "AXIOM_BACKUP_ENCRYPTION_KEY_B64";
+const BACKUP_SIGNING_KEY_ENV: &str = "AXIOM_BACKUP_SIGNING_KEY_B64";
 const ENCRYPTION_MAGIC: &[u8] = b"AXIOMDB1";
 const AES_256_KEY_BYTES: usize = 32;
 const AES_GCM_NONCE_BYTES: usize = 12;
@@ -33,6 +38,7 @@ const MAX_RETENTION_DAYS: u16 = 365;
 pub struct FinalizedBackupArtifact {
     pub backup_path: PathBuf,
     pub metadata_path: PathBuf,
+    pub signature_path: PathBuf,
     pub compressed: bool,
     pub encrypted: bool,
     pub size_bytes: u64,
@@ -45,7 +51,19 @@ pub struct PreparedRestoreArtifact {
     pub sql_path: PathBuf,
     pub decrypted: bool,
     pub decompressed: bool,
+    pub signature_verified: bool,
     pub temporary_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DatabaseBackupSignature {
+    algorithm: String,
+    key_source: String,
+    backup_path: String,
+    metadata_path: String,
+    signature: String,
+    signed_at: chrono::DateTime<Utc>,
 }
 
 pub fn normalize_backup_options(
@@ -104,12 +122,14 @@ pub fn finalize_backup_artifact(
     };
 
     write_metadata(&metadata_path, &metadata)?;
+    let signature_path = write_signature(secure_storage, &current_path, &metadata_path)?;
 
     let pruned_backup_paths = prune_backups(profile, &current_path, options.retention_days)?;
 
     Ok(FinalizedBackupArtifact {
         backup_path: current_path,
         metadata_path,
+        signature_path,
         compressed,
         encrypted,
         size_bytes,
@@ -133,6 +153,7 @@ pub fn prepare_restore_artifact(
     let mut temporary_paths = Vec::new();
     let mut decrypted = false;
     let mut decompressed = false;
+    let signature_verified = verify_signature_if_present(secure_storage, &source_path)?;
 
     if path_has_extension(&current_path, "enc") {
         let decrypted_bytes = decrypt_backup(secure_storage, &current_path)?;
@@ -174,6 +195,7 @@ pub fn prepare_restore_artifact(
         sql_path: current_path,
         decrypted,
         decompressed,
+        signature_verified,
         temporary_paths,
     })
 }
@@ -294,6 +316,10 @@ fn decrypt_bytes(secure_storage: &dyn SecureStorage, payload: &[u8]) -> AppResul
 }
 
 fn backup_key(secure_storage: &dyn SecureStorage) -> AppResult<[u8; AES_256_KEY_BYTES]> {
+    if let Some(key) = external_key(BACKUP_ENCRYPTION_KEY_ENV, "backup encryption")? {
+        return Ok(key);
+    }
+
     if let Some(secret) =
         secure_storage.get_secret(BACKUP_SECRET_NAMESPACE, BACKUP_ENCRYPTION_KEY)?
     {
@@ -314,6 +340,129 @@ fn backup_key(secure_storage: &dyn SecureStorage) -> AppResult<[u8; AES_256_KEY_
     )?;
 
     Ok(key)
+}
+
+fn signing_key(secure_storage: &dyn SecureStorage) -> AppResult<([u8; AES_256_KEY_BYTES], String)> {
+    if let Some(key) = external_key(BACKUP_SIGNING_KEY_ENV, "backup signing")? {
+        return Ok((key, "environment".to_string()));
+    }
+
+    if let Some(secret) = secure_storage.get_secret(BACKUP_SECRET_NAMESPACE, BACKUP_SIGNING_KEY)? {
+        let decoded = STANDARD.decode(secret).map_err(|error| {
+            AppError::Configuration(format!("stored backup signing key is invalid: {error}"))
+        })?;
+        let key = decoded.try_into().map_err(|_| {
+            AppError::Configuration("stored backup signing key has invalid length".to_string())
+        })?;
+        return Ok((key, "secureStorage".to_string()));
+    }
+
+    let mut key = [0_u8; AES_256_KEY_BYTES];
+    OsRng.fill_bytes(&mut key);
+    secure_storage.store_secret(
+        BACKUP_SECRET_NAMESPACE,
+        BACKUP_SIGNING_KEY,
+        &STANDARD.encode(key),
+    )?;
+
+    Ok((key, "secureStorage".to_string()))
+}
+
+fn external_key(env_key: &str, label: &str) -> AppResult<Option<[u8; AES_256_KEY_BYTES]>> {
+    let Ok(value) = std::env::var(env_key) else {
+        return Ok(None);
+    };
+    let decoded = STANDARD.decode(value.trim()).map_err(|error| {
+        AppError::Configuration(format!("{label} external key is not valid base64: {error}"))
+    })?;
+    let key = decoded.try_into().map_err(|_| {
+        AppError::Configuration(format!(
+            "{label} external key must decode to {AES_256_KEY_BYTES} bytes"
+        ))
+    })?;
+
+    Ok(Some(key))
+}
+
+fn write_signature(
+    secure_storage: &dyn SecureStorage,
+    backup_path: &Path,
+    metadata_path: &Path,
+) -> AppResult<PathBuf> {
+    let (key, key_source) = signing_key(secure_storage)?;
+    let signature_path = signature_path_for(backup_path);
+    let signature = DatabaseBackupSignature {
+        algorithm: "hmac-sha256".to_string(),
+        key_source,
+        backup_path: backup_path.to_string_lossy().into_owned(),
+        metadata_path: metadata_path.to_string_lossy().into_owned(),
+        signature: STANDARD.encode(sign_file(&key, backup_path)?),
+        signed_at: Utc::now(),
+    };
+    let payload = serde_json::to_vec_pretty(&signature).map_err(|error| {
+        AppError::Infrastructure(format!("failed to serialize backup signature: {error}"))
+    })?;
+
+    fs::write(&signature_path, payload).map_err(|error| {
+        AppError::Infrastructure(format!("failed to write backup signature: {error}"))
+    })?;
+
+    Ok(signature_path)
+}
+
+fn verify_signature_if_present(
+    secure_storage: &dyn SecureStorage,
+    backup_path: &Path,
+) -> AppResult<bool> {
+    let signature_path = signature_path_for(backup_path);
+
+    if !signature_path.exists() {
+        return Ok(false);
+    }
+
+    let signature = fs::read_to_string(&signature_path).map_err(|error| {
+        AppError::Infrastructure(format!("failed to read backup signature: {error}"))
+    })?;
+    let signature: DatabaseBackupSignature = serde_json::from_str(&signature).map_err(|error| {
+        AppError::Configuration(format!("backup signature file is invalid: {error}"))
+    })?;
+    let (key, _key_source) = signing_key(secure_storage)?;
+    let expected = sign_file(&key, backup_path)?;
+    let actual = STANDARD.decode(signature.signature).map_err(|error| {
+        AppError::Configuration(format!("backup signature value is invalid: {error}"))
+    })?;
+
+    if expected.as_slice() != actual.as_slice() {
+        return Err(AppError::PermissionDenied(
+            "backup signature verification failed".to_string(),
+        ));
+    }
+
+    Ok(true)
+}
+
+fn sign_file(key: &[u8; AES_256_KEY_BYTES], path: &Path) -> AppResult<Vec<u8>> {
+    let mut file = File::open(path).map_err(|error| {
+        AppError::Infrastructure(format!("failed to open backup for signing: {error}"))
+    })?;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).map_err(|error| {
+        AppError::Infrastructure(format!("failed to initialize backup signer: {error}"))
+    })?;
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read_count = file.read(&mut buffer).map_err(|error| {
+            AppError::Infrastructure(format!("failed to read backup for signing: {error}"))
+        })?;
+
+        if read_count == 0 {
+            break;
+        }
+
+        mac.update(&buffer[..read_count]);
+    }
+
+    Ok(mac.finalize().into_bytes().to_vec())
 }
 
 fn validate_restore_path(path: &str) -> AppResult<PathBuf> {
@@ -429,6 +578,14 @@ fn metadata_path_for(path: &Path) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or("backup.sql");
     path.with_file_name(format!("{file_name}.metadata.json"))
+}
+
+fn signature_path_for(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("backup.sql");
+    path.with_file_name(format!("{file_name}.sig.json"))
 }
 
 fn restore_work_dir(profile: &ProjectDatabaseProfile) -> AppResult<PathBuf> {
