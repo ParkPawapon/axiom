@@ -1,5 +1,7 @@
 use crate::domain::database::database_config::{DatabaseBackupOptions, DatabaseBackupResult};
 use crate::domain::project::project_id::ProjectId;
+use crate::infrastructure::databases::remote_backup_destination::copy_backup_to_remote_destination;
+use crate::ports::database_backup_destination_repository::DatabaseBackupDestinationRepository;
 use crate::ports::database_provisioner::DatabaseProvisioner;
 use crate::ports::database_provisioning_repository::DatabaseProvisioningRepository;
 use crate::shared::error::app_error::AppError;
@@ -10,6 +12,7 @@ use super::database_type_parser::parse_database_type;
 
 pub fn backup_project_database(
     database_repository: &dyn DatabaseProvisioningRepository,
+    backup_destination_repository: &dyn DatabaseBackupDestinationRepository,
     database_provisioner: &dyn DatabaseProvisioner,
     project_id: &str,
     database_type: &str,
@@ -27,5 +30,14 @@ pub fn backup_project_database(
             ))
         })?;
 
-    database_provisioner.backup_project_database(&profile, options.unwrap_or_default())
+    let mut result =
+        database_provisioner.backup_project_database(&profile, options.unwrap_or_default())?;
+
+    if let Some(destination) =
+        backup_destination_repository.get_destination(&project_id, database_type)?
+    {
+        result.remote_copy_paths = copy_backup_to_remote_destination(&result, &destination)?;
+    }
+
+    Ok(result)
 }

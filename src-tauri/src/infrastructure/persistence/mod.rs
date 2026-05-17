@@ -1,3 +1,4 @@
+pub mod file_database_backup_destination_repository;
 pub mod file_database_backup_policy_repository;
 pub mod file_database_provisioning_repository;
 pub mod file_project_repository;
