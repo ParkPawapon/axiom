@@ -9,25 +9,33 @@ import { Button } from "../../../shared/components/ui/button";
 import { EmptyState } from "../../../shared/components/ui/empty-state";
 import {
   deleteProject,
+  generateProjectDockerCompose,
+  getProjectDockerStatus,
   getProjectPhpProcessStatus,
   getProjectPhpVersion,
   installProjectPhpRuntime,
   listProjects,
   restartProjectPhpProcess,
   restartProjectPhpProcesses,
+  restartProjectDocker,
   selectProjectPhpVersion,
+  startProjectDocker,
   startProjectPhpProcess,
   startProjectPhpProcesses,
+  stopProjectDocker,
   stopProjectPhpProcess,
   stopProjectPhpProcesses,
   updateProject,
 } from "../api/project.commands";
 import { ProjectList } from "../components/project-list";
+import { ProjectDockerPanel } from "../components/project-docker-panel";
 import { ProjectPhpProcessPanel } from "../components/project-php-process-panel";
 import { ProjectPhpVersionSelector } from "../components/project-php-version-selector";
 import { ProjectSetupWizard } from "../components/project-setup-wizard";
 import type {
   Project,
+  ProjectDockerActionResult,
+  ProjectDockerStatus,
   ProjectDraft,
   ProjectPhpProcessActionResult,
   ProjectPhpProcessStatus,
@@ -52,12 +60,14 @@ export function ProjectsPage() {
   const [draftVersion, setDraftVersion] = useState("");
   const [errorMessage, setErrorMessage] = useState<string>();
   const [isInstalling, setIsInstalling] = useState(false);
+  const [isDockerBusy, setIsDockerBusy] = useState(false);
   const [isProcessBusy, setIsProcessBusy] = useState(false);
   const [isProjectBusy, setIsProjectBusy] = useState(false);
   const [isProjectsLoading, setIsProjectsLoading] = useState(true);
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
   const [isSavingRuntime, setIsSavingRuntime] = useState(false);
   const [noticeMessage, setNoticeMessage] = useState<string>();
+  const [dockerStatus, setDockerStatus] = useState<ProjectDockerStatus>();
   const [processStatus, setProcessStatus] = useState<ProjectPhpProcessStatus>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedActionProjectIds, setSelectedActionProjectIds] = useState<string[]>([]);
@@ -121,6 +131,15 @@ export function ProjectsPage() {
     }
   }, []);
 
+  const loadDockerStatus = useCallback(async (projectId: string) => {
+    try {
+      const status = await getProjectDockerStatus(projectId);
+      setDockerStatus(status);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  }, []);
+
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
@@ -129,13 +148,15 @@ export function ProjectsPage() {
     if (!selectedProjectId) {
       setConfig(undefined);
       setDraftVersion("");
+      setDockerStatus(undefined);
       setProcessStatus(undefined);
       return;
     }
 
     void loadConfig(selectedProjectId);
+    void loadDockerStatus(selectedProjectId);
     void loadProcessStatus(selectedProjectId);
-  }, [loadConfig, loadProcessStatus, selectedProjectId]);
+  }, [loadConfig, loadDockerStatus, loadProcessStatus, selectedProjectId]);
 
   const selectedActionProjects = useMemo(
     () => projects.filter((project) => selectedActionProjectIds.includes(project.id)),
@@ -419,6 +440,89 @@ export function ProjectsPage() {
     [loadProcessStatus, selectedActionProjectIds, selectedProjectId, summarizeBatchResults],
   );
 
+  const runDockerAction = useCallback(
+    async (
+      actionLabel: string,
+      confirmation: string[],
+      action: (projectId: string) => Promise<ProjectDockerActionResult>,
+    ) => {
+      if (!selectedProjectId) {
+        return;
+      }
+
+      const shouldRun = await confirm(confirmation.join("\n\n"), {
+        kind: "warning",
+        title: `${actionLabel} project Docker runtime`,
+      });
+
+      if (!shouldRun) {
+        return;
+      }
+
+      setIsDockerBusy(true);
+      setErrorMessage(undefined);
+      setNoticeMessage(undefined);
+
+      try {
+        const result = await action(selectedProjectId);
+        setDockerStatus(result.status);
+        setNoticeMessage(result.message);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+        await loadDockerStatus(selectedProjectId);
+      } finally {
+        setIsDockerBusy(false);
+      }
+    },
+    [loadDockerStatus, selectedProjectId],
+  );
+
+  const handleGenerateDockerCompose = useCallback(() => {
+    void runDockerAction(
+      "Generate",
+      [
+        "Generate a project-scoped Docker Compose file for the selected project?",
+        "AxiomPHP will write the Compose file to its app-owned runtime directory and bind the project document root as a Docker volume.",
+        "No Docker container is started by this action.",
+      ],
+      generateProjectDockerCompose,
+    );
+  }, [runDockerAction]);
+
+  const handleStartDocker = useCallback(() => {
+    void runDockerAction(
+      "Start",
+      [
+        "Start the selected project through Docker Compose?",
+        "AxiomPHP will generate or refresh the project Compose file, then run docker compose up through the Rust backend allowlist.",
+        "Docker Desktop must be installed and running after Docker data has been reset.",
+      ],
+      startProjectDocker,
+    );
+  }, [runDockerAction]);
+
+  const handleStopDocker = useCallback(() => {
+    void runDockerAction(
+      "Stop",
+      [
+        "Stop the selected project's Docker Compose runtime?",
+        "AxiomPHP will run docker compose down for only this project's Compose project name.",
+      ],
+      stopProjectDocker,
+    );
+  }, [runDockerAction]);
+
+  const handleRestartDocker = useCallback(() => {
+    void runDockerAction(
+      "Restart",
+      [
+        "Restart the selected project's Docker Compose runtime?",
+        "AxiomPHP will stop and start only this project's Compose project name through the backend Docker boundary.",
+      ],
+      restartProjectDocker,
+    );
+  }, [runDockerAction]);
+
   return (
     <PageShell
       title="Projects"
@@ -522,6 +626,15 @@ export function ProjectsPage() {
                 onRestart={handleRestartProcess}
                 onStart={handleStartProcess}
                 onStop={handleStopProcess}
+              />
+              <ProjectDockerPanel
+                isBusy={isDockerBusy}
+                status={dockerStatus}
+                onGenerate={handleGenerateDockerCompose}
+                onRefresh={() => void loadDockerStatus(selectedProject.id)}
+                onRestart={handleRestartDocker}
+                onStart={handleStartDocker}
+                onStop={handleStopDocker}
               />
             </>
           ) : null}

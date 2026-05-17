@@ -98,3 +98,25 @@ export interface ProjectPhpProcessActionResult {
   readonly errorCode?: string;
   readonly errorMessage?: string;
 }
+
+export type ProjectDockerState = "failed" | "notGenerated" | "running" | "stopped" | "unavailable";
+export type ProjectDockerAction = "generate" | "restart" | "start" | "stop";
+
+export interface ProjectDockerStatus {
+  readonly projectId: string;
+  readonly state: ProjectDockerState;
+  readonly composeProjectName: string;
+  readonly composeFilePath?: string | null;
+  readonly serviceName: string;
+  readonly containerId?: string | null;
+  readonly publishedPort?: number | null;
+  readonly url?: string | null;
+  readonly statusMessage: string;
+}
+
+export interface ProjectDockerActionResult {
+  readonly projectId: string;
+  readonly action: ProjectDockerAction;
+  readonly status: ProjectDockerStatus;
+  readonly message: string;
+}

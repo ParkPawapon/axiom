@@ -1,6 +1,8 @@
 import { invokeTauriCommand } from "../../../core/api/tauri-client";
 import type {
   Project,
+  ProjectDockerActionResult,
+  ProjectDockerStatus,
   ProjectPhpInstallPlan,
   ProjectPhpInstallResult,
   ProjectPhpProcessActionResult,
@@ -93,4 +95,26 @@ export function restartProjectPhpProcesses(projectIds: string[]) {
   return invokeTauriCommand<ProjectPhpProcessActionResult[]>("restart_project_php_processes", {
     projectIds,
   });
+}
+
+export function generateProjectDockerCompose(projectId: string) {
+  return invokeTauriCommand<ProjectDockerActionResult>("generate_project_docker_compose", {
+    projectId,
+  });
+}
+
+export function getProjectDockerStatus(projectId: string) {
+  return invokeTauriCommand<ProjectDockerStatus>("get_project_docker_status", { projectId });
+}
+
+export function startProjectDocker(projectId: string) {
+  return invokeTauriCommand<ProjectDockerActionResult>("start_project_docker", { projectId });
+}
+
+export function stopProjectDocker(projectId: string) {
+  return invokeTauriCommand<ProjectDockerActionResult>("stop_project_docker", { projectId });
+}
+
+export function restartProjectDocker(projectId: string) {
+  return invokeTauriCommand<ProjectDockerActionResult>("restart_project_docker", { projectId });
 }
