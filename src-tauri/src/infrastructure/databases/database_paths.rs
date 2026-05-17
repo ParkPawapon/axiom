@@ -66,8 +66,11 @@ pub fn collect_migration_files(migration_dir: &Path) -> AppResult<Vec<PathBuf>> 
             })?
             .path();
 
+        let file_name = path.file_name().and_then(|file_name| file_name.to_str());
+
         if path.extension().and_then(|extension| extension.to_str()) == Some("sql")
             && path.is_file()
+            && !file_name.is_some_and(|file_name| file_name.ends_with(".down.sql"))
         {
             migrations.push(path);
         }

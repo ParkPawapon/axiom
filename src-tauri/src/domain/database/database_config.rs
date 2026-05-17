@@ -143,12 +143,14 @@ pub struct DatabaseBackupResult {
     pub database_type: DatabaseType,
     pub backup_path: String,
     pub metadata_path: Option<String>,
+    pub signature_path: Option<String>,
     pub compression: DatabaseBackupCompression,
     pub encryption: DatabaseBackupEncryption,
     pub compressed: bool,
     pub encrypted: bool,
     pub size_bytes: u64,
     pub pruned_backup_paths: Vec<String>,
+    pub remote_copy_paths: Vec<String>,
     pub status_message: String,
 }
 
@@ -161,6 +163,7 @@ pub struct DatabaseRestoreResult {
     pub restored_from_path: String,
     pub decrypted: bool,
     pub decompressed: bool,
+    pub signature_verified: bool,
     pub status_message: String,
 }
 
@@ -208,6 +211,48 @@ pub struct DatabaseBackupPolicyUpdateResult {
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupRemoteDestination {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub enabled: bool,
+    pub destination_path: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupRemoteDestinationUpdate {
+    pub enabled: bool,
+    pub destination_path: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupRemoteDestinationUpdateResult {
+    pub destination: DatabaseBackupRemoteDestination,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupSchedulerStatus {
+    pub installed: bool,
+    pub platform: String,
+    pub schedule_label: String,
+    pub manifest_path: Option<String>,
+    pub last_checked_at: DateTime<Utc>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupSchedulerInstallResult {
+    pub status: DatabaseBackupSchedulerStatus,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScheduledDatabaseBackupRunResult {
     pub checked_policies: usize,
     pub completed_backups: usize,
@@ -223,6 +268,7 @@ pub struct DatabaseMigrationFile {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
     pub migration_path: String,
+    pub rollback_path: Option<String>,
     pub status_message: String,
 }
 
@@ -232,5 +278,26 @@ pub struct DatabaseMigrationRunResult {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
     pub applied_migrations: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseMigrationRollbackResult {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub rolled_back_migrations: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabasePointInTimeRestoreResult {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub target_time: DateTime<Utc>,
+    pub selected_backup_path: String,
+    pub selected_backup_created_at: DateTime<Utc>,
+    pub restore: DatabaseRestoreResult,
     pub status_message: String,
 }

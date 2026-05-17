@@ -6,9 +6,9 @@ use chrono::Utc;
 use directories::ProjectDirs;
 
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
-    DatabaseProvisioningResult, DatabaseProvisioningStatus, DatabaseRestoreResult,
-    ProjectDatabaseProfile,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile,
+    DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
+    DatabaseProvisioningStatus, DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
 use crate::domain::project::project::Project;
@@ -178,12 +178,14 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             database_type: profile.database_type,
             backup_path: artifact.backup_path.to_string_lossy().into_owned(),
             metadata_path: Some(artifact.metadata_path.to_string_lossy().into_owned()),
+            signature_path: Some(artifact.signature_path.to_string_lossy().into_owned()),
             compression: options.compression,
             encryption: options.encryption,
             compressed: artifact.compressed,
             encrypted: artifact.encrypted,
             size_bytes: artifact.size_bytes,
             pruned_backup_paths: artifact.pruned_backup_paths,
+            remote_copy_paths: Vec::new(),
             status_message:
                 "Database backup completed with managed retention and artifact processing."
                     .to_string(),
@@ -230,6 +232,7 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             restored_from_path: restore_artifact.source_path.to_string_lossy().into_owned(),
             decrypted: restore_artifact.decrypted,
             decompressed: restore_artifact.decompressed,
+            signature_verified: restore_artifact.signature_verified,
             status_message,
         })
     }
@@ -245,8 +248,14 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         let migration_name = sanitize_migration_name(name)?;
         let timestamp = Utc::now().format("%Y%m%d%H%M%S");
         let migration_path = migration_dir.join(format!("{timestamp}_{migration_name}.sql"));
+        let rollback_path = migration_dir.join(format!("{timestamp}_{migration_name}.down.sql"));
         let header = format!(
             "-- AxiomPHP migration\n-- Project: {}\n-- Database: {}\n\n",
+            project_id.0,
+            database_type.as_key()
+        );
+        let rollback_header = format!(
+            "-- AxiomPHP migration rollback\n-- Project: {}\n-- Database: {}\n\n",
             project_id.0,
             database_type.as_key()
         );
@@ -254,11 +263,18 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         fs::write(&migration_path, header).map_err(|error| {
             AppError::Infrastructure(format!("failed to create migration file: {error}"))
         })?;
+        if let Err(error) = fs::write(&rollback_path, rollback_header) {
+            let _ = fs::remove_file(&migration_path);
+            return Err(AppError::Infrastructure(format!(
+                "failed to create migration rollback file: {error}"
+            )));
+        }
 
         Ok(DatabaseMigrationFile {
             project_id: project_id.clone(),
             database_type,
             migration_path: migration_path.to_string_lossy().into_owned(),
+            rollback_path: Some(rollback_path.to_string_lossy().into_owned()),
             status_message: "Migration file created.".to_string(),
         })
     }
@@ -315,6 +331,60 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             status_message,
         })
     }
+
+    fn rollback_migrations(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        steps: u16,
+    ) -> AppResult<DatabaseMigrationRollbackResult> {
+        ensure_profile_ready(profile)?;
+        let migration_dir =
+            validate_existing_directory(&profile.migration_dir, "migration directory")?;
+        let password = self.password_for_profile(profile)?;
+        let rollback_candidates = profile
+            .applied_migrations
+            .iter()
+            .rev()
+            .take(usize::from(steps))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if rollback_candidates.is_empty() {
+            return Ok(DatabaseMigrationRollbackResult {
+                project_id: profile.project_id.clone(),
+                database_type: profile.database_type,
+                rolled_back_migrations: Vec::new(),
+                status_message: "No applied database migrations were available to roll back."
+                    .to_string(),
+            });
+        }
+
+        let mut rolled_back_migrations = Vec::new();
+        for migration_name in rollback_candidates {
+            let rollback_path = rollback_path_for(&migration_dir, &migration_name)?;
+
+            match profile.database_type {
+                DatabaseType::Mysql => {
+                    run_mysql_script(profile, &password, &rollback_path, MIGRATION_TIMEOUT)?;
+                }
+                DatabaseType::Postgresql => {
+                    run_postgres_script(profile, &password, &rollback_path, MIGRATION_TIMEOUT)?;
+                }
+            }
+
+            rolled_back_migrations.push(migration_name);
+        }
+
+        Ok(DatabaseMigrationRollbackResult {
+            project_id: profile.project_id.clone(),
+            database_type: profile.database_type,
+            status_message: format!(
+                "Rolled back {} database migration(s).",
+                rolled_back_migrations.len()
+            ),
+            rolled_back_migrations,
+        })
+    }
 }
 
 fn ensure_profile_ready(profile: &ProjectDatabaseProfile) -> AppResult<()> {
@@ -325,4 +395,27 @@ fn ensure_profile_ready(profile: &ProjectDatabaseProfile) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+fn rollback_path_for(migration_dir: &std::path::Path, migration_name: &str) -> AppResult<PathBuf> {
+    if migration_name.contains(std::path::MAIN_SEPARATOR) || migration_name.ends_with(".down.sql") {
+        return Err(AppError::Validation(
+            "applied migration name is not valid for rollback".to_string(),
+        ));
+    }
+
+    let Some(stem) = migration_name.strip_suffix(".sql") else {
+        return Err(AppError::Validation(
+            "applied migration must be a .sql migration file".to_string(),
+        ));
+    };
+    let rollback_path = migration_dir.join(format!("{stem}.down.sql"));
+
+    if !rollback_path.is_file() {
+        return Err(AppError::Validation(format!(
+            "rollback migration file is missing for `{migration_name}`"
+        )));
+    }
+
+    Ok(rollback_path)
 }

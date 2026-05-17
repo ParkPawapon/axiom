@@ -1,6 +1,7 @@
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile, DatabaseMigrationRunResult,
-    DatabaseProvisioningResult, DatabaseRestoreResult, ProjectDatabaseProfile,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile,
+    DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
+    DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
 use crate::domain::project::project::Project;
@@ -38,4 +39,10 @@ pub trait DatabaseProvisioner: Send + Sync {
         &self,
         profile: &ProjectDatabaseProfile,
     ) -> AppResult<DatabaseMigrationRunResult>;
+
+    fn rollback_migrations(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        steps: u16,
+    ) -> AppResult<DatabaseMigrationRollbackResult>;
 }
