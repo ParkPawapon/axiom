@@ -2,7 +2,7 @@
 
 AxiomPHP is a production-oriented desktop application foundation for a modern local PHP development control center. The long-term goal is to provide a safer, cleaner replacement for XAMPP-style workflows while keeping services, projects, credentials, and operating-system actions behind explicit boundaries.
 
-Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection and explicit package-manager installation are available. Real service lifecycle management, Docker orchestration, MySQL, PostgreSQL, host file modification, and certificate generation are intentionally not implemented.
+Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, managed database provisioning, security controls, and backup/restore orchestration are available behind Rust application use cases and infrastructure ports.
 
 ## Problem Statement
 
@@ -42,6 +42,9 @@ Future implementation must keep Rust as the security boundary between UI intent 
 - Route all process execution through the command runner abstraction.
 - Run package-manager installation only after explicit frontend confirmation.
 - Keep package-manager command arguments backend-owned and version-catalog based.
+- Keep backup encryption and signing keys in secure storage or explicit external key environment variables.
+- Verify signed backup artifacts before managed restore when a signature sidecar exists.
+- Run OS-level background backup scheduling through app-owned launch/task adapters only.
 - Never expose secrets in frontend logs or serialized command errors.
 - Never store passwords or tokens in plain text.
 - Use platform-specific secure storage such as Keychain on macOS and Credential Manager on Windows.
@@ -57,10 +60,10 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 
 - Project-based PHP environment configuration
 - Project process switching and runtime supervision
-- MySQL and PostgreSQL service adapters
-- Docker-based service orchestration
-- Reverse proxy and local domain management
-- Local HTTPS certificate workflow
+- Cloud remote backup providers
+- Continuous WAL/binlog point-in-time recovery
+- External KMS-backed backup keys
+- Cross-machine backup trust workflows
 - Port conflict detection
 - Environment profile management
 - Logs viewer and service health status
@@ -111,4 +114,4 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 
 ## Not Implemented Yet
 
-The app can persist a project PHP binary selection when a matching local PHP binary is detected, install PHP through Homebrew on macOS or Scoop on Windows after explicit confirmation, and perform safe passive service version probes through narrow command policies. It does not start PHP project processes, start, stop, restart, or manage MySQL, PostgreSQL, Docker, reverse proxy services, host files, or SSL certificates. Those capabilities should be implemented later through the existing ports, application use cases, infrastructure adapters, and platform-specific modules.
+The backup/restore layer now supports managed artifacts, file picker restore, scheduled policies, OS scheduler installation, mounted remote destinations, point-in-time snapshot restore, migration rollback files, retention, compression, encryption, and HMAC signing. It does not yet provide cloud-native backup destinations, continuous database-log replay recovery, automatic rollback SQL generation, external KMS integration, or cross-machine artifact trust enrollment.
