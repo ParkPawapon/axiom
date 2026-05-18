@@ -1,4 +1,5 @@
 pub mod database;
+pub mod docker;
 pub mod logs;
 pub mod networking;
 pub mod project;

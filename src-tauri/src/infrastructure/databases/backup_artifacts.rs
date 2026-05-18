@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, OsRng};
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::{Aes256Gcm, KeyInit as AesKeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -570,7 +570,7 @@ fn sign_file(key: &[u8; AES_256_KEY_BYTES], path: &Path) -> AppResult<Vec<u8>> {
     let mut file = File::open(path).map_err(|error| {
         AppError::Infrastructure(format!("failed to open backup for signing: {error}"))
     })?;
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).map_err(|error| {
+    let mut mac = <Hmac<Sha256> as HmacKeyInit>::new_from_slice(key).map_err(|error| {
         AppError::Infrastructure(format!("failed to initialize backup signer: {error}"))
     })?;
     let mut buffer = [0_u8; 8192];
