@@ -12,6 +12,7 @@ import {
   startService,
   stopService,
 } from "../api/service.commands";
+import { ProjectDockerOrchestrationPanel } from "../components/project-docker-orchestration-panel";
 import { ServiceControlPanel } from "../components/service-control-panel";
 import type { ManagedService, ServiceAction } from "../types/service.types";
 
@@ -133,6 +134,7 @@ export function ServicesPage() {
           services={services}
         />
       ) : null}
+      <ProjectDockerOrchestrationPanel />
     </PageShell>
   );
 }
