@@ -12,12 +12,13 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::domain::database::database_config::{
-    DatabaseBackupCompression, DatabaseBackupEncryption, DatabaseBackupMetadata,
-    DatabaseBackupOptions, ProjectDatabaseProfile,
+    DatabaseBackupCompression, DatabaseBackupEncryption, DatabaseBackupKeyManagementStatus,
+    DatabaseBackupMetadata, DatabaseBackupOptions, DatabaseBackupTrustBundle,
+    DatabaseBackupTrustExportResult, DatabaseBackupTrustImportResult, ProjectDatabaseProfile,
 };
 use crate::ports::secure_storage::SecureStorage;
 use crate::shared::error::app_error::AppError;
@@ -26,8 +27,11 @@ use crate::shared::result::app_result::AppResult;
 const BACKUP_SECRET_NAMESPACE: &str = "database-backup";
 const BACKUP_ENCRYPTION_KEY: &str = "managed-backup-key";
 const BACKUP_SIGNING_KEY: &str = "managed-backup-signing-key";
+const BACKUP_TRUST_FINGERPRINTS_KEY: &str = "trusted-backup-signing-fingerprints";
 const BACKUP_ENCRYPTION_KEY_ENV: &str = "AXIOM_BACKUP_ENCRYPTION_KEY_B64";
 const BACKUP_SIGNING_KEY_ENV: &str = "AXIOM_BACKUP_SIGNING_KEY_B64";
+const BACKUP_KMS_PROVIDER_ENV: &str = "AXIOM_BACKUP_KMS_PROVIDER";
+const BACKUP_KMS_KEY_ID_ENV: &str = "AXIOM_BACKUP_KMS_KEY_ID";
 const ENCRYPTION_MAGIC: &[u8] = b"AXIOMDB1";
 const AES_256_KEY_BYTES: usize = 32;
 const AES_GCM_NONCE_BYTES: usize = 12;
@@ -60,10 +64,111 @@ pub struct PreparedRestoreArtifact {
 struct DatabaseBackupSignature {
     algorithm: String,
     key_source: String,
+    #[serde(default)]
+    key_fingerprint: String,
     backup_path: String,
     metadata_path: String,
     signature: String,
     signed_at: chrono::DateTime<Utc>,
+}
+
+pub fn backup_key_management_status(
+    secure_storage: &dyn SecureStorage,
+) -> AppResult<DatabaseBackupKeyManagementStatus> {
+    let encryption_key_source = key_source(
+        secure_storage,
+        BACKUP_ENCRYPTION_KEY_ENV,
+        BACKUP_ENCRYPTION_KEY,
+    )?;
+    let signing_key_source =
+        key_source(secure_storage, BACKUP_SIGNING_KEY_ENV, BACKUP_SIGNING_KEY)?;
+    let trusted_signing_key_fingerprints = trusted_signing_key_fingerprints(secure_storage)?;
+    let external_kms_provider = env_value(BACKUP_KMS_PROVIDER_ENV);
+    let external_kms_key_id = env_value(BACKUP_KMS_KEY_ID_ENV);
+
+    Ok(DatabaseBackupKeyManagementStatus {
+        encryption_key_source,
+        signing_key_source,
+        external_kms_provider,
+        external_kms_key_id,
+        trusted_signing_key_fingerprints,
+        status_message: "Backup key management status was inspected without exposing key material."
+            .to_string(),
+    })
+}
+
+pub fn export_backup_trust_bundle(
+    secure_storage: &dyn SecureStorage,
+    output_dir: &str,
+) -> AppResult<DatabaseBackupTrustExportResult> {
+    let output_dir = validate_output_directory(output_dir)?;
+    let (signing_key, _source) = signing_key(secure_storage)?;
+    let signing_key_fingerprint = key_fingerprint(&signing_key);
+    let bundle = DatabaseBackupTrustBundle {
+        version: 1,
+        algorithm: "hmac-sha256-key-fingerprint".to_string(),
+        signing_key_fingerprint: signing_key_fingerprint.clone(),
+        exported_at: Utc::now(),
+    };
+    let trust_bundle_path = output_dir.join(format!(
+        "axiomphp-backup-trust-{}.json",
+        signing_key_fingerprint.chars().take(16).collect::<String>()
+    ));
+    let payload = serde_json::to_vec_pretty(&bundle).map_err(|error| {
+        AppError::Infrastructure(format!("failed to serialize backup trust bundle: {error}"))
+    })?;
+
+    fs::write(&trust_bundle_path, payload).map_err(|error| {
+        AppError::Infrastructure(format!("failed to write backup trust bundle: {error}"))
+    })?;
+
+    Ok(DatabaseBackupTrustExportResult {
+        trust_bundle_path: trust_bundle_path.to_string_lossy().into_owned(),
+        signing_key_fingerprint,
+        status_message: "Backup trust bundle was exported without secret key material.".to_string(),
+    })
+}
+
+pub fn import_backup_trust_bundle(
+    secure_storage: &dyn SecureStorage,
+    trust_bundle_path: &str,
+) -> AppResult<DatabaseBackupTrustImportResult> {
+    let trust_bundle_path = validate_trust_bundle_path(trust_bundle_path)?;
+    let payload = fs::read_to_string(&trust_bundle_path).map_err(|error| {
+        AppError::Infrastructure(format!("failed to read backup trust bundle: {error}"))
+    })?;
+    let bundle: DatabaseBackupTrustBundle = serde_json::from_str(&payload).map_err(|error| {
+        AppError::Configuration(format!("backup trust bundle is invalid: {error}"))
+    })?;
+
+    if bundle.algorithm != "hmac-sha256-key-fingerprint" || bundle.version != 1 {
+        return Err(AppError::Validation(
+            "backup trust bundle uses an unsupported format".to_string(),
+        ));
+    }
+
+    let mut trusted = trusted_signing_key_fingerprints(secure_storage)?;
+    if !trusted
+        .iter()
+        .any(|fingerprint| fingerprint == &bundle.signing_key_fingerprint)
+    {
+        trusted.push(bundle.signing_key_fingerprint.clone());
+        secure_storage.store_secret(
+            BACKUP_SECRET_NAMESPACE,
+            BACKUP_TRUST_FINGERPRINTS_KEY,
+            &serde_json::to_string(&trusted).map_err(|error| {
+                AppError::Infrastructure(format!(
+                    "failed to serialize trusted backup fingerprints: {error}"
+                ))
+            })?,
+        )?;
+    }
+
+    Ok(DatabaseBackupTrustImportResult {
+        trust_bundle_path: trust_bundle_path.to_string_lossy().into_owned(),
+        trusted_signing_key_fingerprint: bundle.signing_key_fingerprint,
+        status_message: "Backup signing key fingerprint was enrolled as trusted.".to_string(),
+    })
 }
 
 pub fn normalize_backup_options(
@@ -390,10 +495,12 @@ fn write_signature(
     metadata_path: &Path,
 ) -> AppResult<PathBuf> {
     let (key, key_source) = signing_key(secure_storage)?;
+    let key_fingerprint = key_fingerprint(&key);
     let signature_path = signature_path_for(backup_path);
     let signature = DatabaseBackupSignature {
         algorithm: "hmac-sha256".to_string(),
         key_source,
+        key_fingerprint,
         backup_path: backup_path.to_string_lossy().into_owned(),
         metadata_path: metadata_path.to_string_lossy().into_owned(),
         signature: STANDARD.encode(sign_file(&key, backup_path)?),
@@ -438,6 +545,24 @@ fn verify_signature_if_present(
         ));
     }
 
+    let trusted_fingerprints = trusted_signing_key_fingerprints(secure_storage)?;
+    if !trusted_fingerprints.is_empty() {
+        let fingerprint = if signature.key_fingerprint.trim().is_empty() {
+            key_fingerprint(&key)
+        } else {
+            signature.key_fingerprint
+        };
+
+        if !trusted_fingerprints
+            .iter()
+            .any(|trusted| trusted == &fingerprint)
+        {
+            return Err(AppError::PermissionDenied(
+                "backup signature key is not enrolled as trusted on this machine".to_string(),
+            ));
+        }
+    }
+
     Ok(true)
 }
 
@@ -463,6 +588,108 @@ fn sign_file(key: &[u8; AES_256_KEY_BYTES], path: &Path) -> AppResult<Vec<u8>> {
     }
 
     Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn key_source(
+    secure_storage: &dyn SecureStorage,
+    env_key: &str,
+    storage_key: &str,
+) -> AppResult<String> {
+    if std::env::var(env_key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_some()
+    {
+        return Ok("environment".to_string());
+    }
+
+    if secure_storage
+        .get_secret(BACKUP_SECRET_NAMESPACE, storage_key)?
+        .is_some()
+    {
+        return Ok("secureStorage".to_string());
+    }
+
+    Ok("notInitialized".to_string())
+}
+
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn key_fingerprint(key: &[u8; AES_256_KEY_BYTES]) -> String {
+    let digest = Sha256::digest(key);
+
+    hex_encode(&digest)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    encoded
+}
+
+fn trusted_signing_key_fingerprints(secure_storage: &dyn SecureStorage) -> AppResult<Vec<String>> {
+    let Some(payload) =
+        secure_storage.get_secret(BACKUP_SECRET_NAMESPACE, BACKUP_TRUST_FINGERPRINTS_KEY)?
+    else {
+        return Ok(Vec::new());
+    };
+
+    serde_json::from_str::<Vec<String>>(&payload).map_err(|error| {
+        AppError::Configuration(format!(
+            "trusted backup signing fingerprint store is invalid: {error}"
+        ))
+    })
+}
+
+fn validate_output_directory(path: &str) -> AppResult<PathBuf> {
+    let path = Path::new(path.trim());
+
+    if !path.is_absolute() {
+        return Err(AppError::Validation(
+            "backup trust export directory must be absolute".to_string(),
+        ));
+    }
+
+    if path.exists() && !path.is_dir() {
+        return Err(AppError::Validation(
+            "backup trust export path must be a directory".to_string(),
+        ));
+    }
+
+    fs::create_dir_all(path).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to create backup trust export directory: {error}"
+        ))
+    })?;
+
+    Ok(path.to_path_buf())
+}
+
+fn validate_trust_bundle_path(path: &str) -> AppResult<PathBuf> {
+    let path = Path::new(path.trim()).canonicalize().map_err(|error| {
+        AppError::Validation(format!(
+            "backup trust bundle path must exist and be readable: {error}"
+        ))
+    })?;
+
+    if !path.is_file() {
+        return Err(AppError::Validation(
+            "backup trust bundle path must point to a file".to_string(),
+        ));
+    }
+
+    Ok(path)
 }
 
 fn validate_restore_path(path: &str) -> AppResult<PathBuf> {

@@ -341,3 +341,39 @@ pub struct DatabaseContinuousReplayRestoreResult {
     pub replayed_log_paths: Vec<String>,
     pub status_message: String,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupKeyManagementStatus {
+    pub encryption_key_source: String,
+    pub signing_key_source: String,
+    pub external_kms_provider: Option<String>,
+    pub external_kms_key_id: Option<String>,
+    pub trusted_signing_key_fingerprints: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupTrustBundle {
+    pub version: u16,
+    pub algorithm: String,
+    pub signing_key_fingerprint: String,
+    pub exported_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupTrustExportResult {
+    pub trust_bundle_path: String,
+    pub signing_key_fingerprint: String,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupTrustImportResult {
+    pub trust_bundle_path: String,
+    pub trusted_signing_key_fingerprint: String,
+    pub status_message: String,
+}

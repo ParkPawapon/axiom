@@ -2,8 +2,11 @@ use tauri::State;
 
 use crate::application::databases::backup_project_database_use_case;
 use crate::application::databases::create_project_database_migration_use_case;
+use crate::application::databases::export_database_backup_trust_bundle_use_case;
 use crate::application::databases::generate_project_database_migration_rollback_use_case;
+use crate::application::databases::get_database_backup_key_management_status_use_case;
 use crate::application::databases::get_database_backup_scheduler_status_use_case;
+use crate::application::databases::import_database_backup_trust_bundle_use_case;
 use crate::application::databases::install_database_backup_scheduler_use_case;
 use crate::application::databases::list_database_backup_destinations_use_case;
 use crate::application::databases::list_database_backup_policies_use_case;
@@ -20,10 +23,11 @@ use crate::application::databases::update_database_backup_destination_use_case;
 use crate::application::databases::update_database_backup_policy_use_case;
 use crate::bootstrap::app_state::AppState;
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupPolicy, DatabaseBackupPolicyUpdate,
-    DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
+    DatabaseBackupKeyManagementStatus, DatabaseBackupOptions, DatabaseBackupPolicy,
+    DatabaseBackupPolicyUpdate, DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
     DatabaseBackupRemoteDestinationUpdate, DatabaseBackupRemoteDestinationUpdateResult,
     DatabaseBackupResult, DatabaseBackupSchedulerInstallResult, DatabaseBackupSchedulerStatus,
+    DatabaseBackupTrustExportResult, DatabaseBackupTrustImportResult,
     DatabaseContinuousReplayRestoreResult, DatabaseMigrationFile,
     DatabaseMigrationRollbackGenerationResult, DatabaseMigrationRollbackResult,
     DatabaseMigrationRunResult, DatabasePointInTimeRestoreResult, DatabaseProvisioningResult,
@@ -184,6 +188,52 @@ pub fn get_database_backup_scheduler_status(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database backup scheduler status command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn get_database_backup_key_management_status(
+    state: State<'_, AppState>,
+) -> Result<DatabaseBackupKeyManagementStatus, CommandErrorPayload> {
+    get_database_backup_key_management_status_use_case::get_database_backup_key_management_status(
+        state.secure_storage(),
+    )
+    .map_err(|error| {
+        tracing::warn!(
+            ?error,
+            "database backup key management status command failed"
+        );
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn export_database_backup_trust_bundle(
+    state: State<'_, AppState>,
+    output_dir: String,
+) -> Result<DatabaseBackupTrustExportResult, CommandErrorPayload> {
+    export_database_backup_trust_bundle_use_case::export_database_backup_trust_bundle(
+        state.secure_storage(),
+        &output_dir,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup trust export command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn import_database_backup_trust_bundle(
+    state: State<'_, AppState>,
+    trust_bundle_path: String,
+) -> Result<DatabaseBackupTrustImportResult, CommandErrorPayload> {
+    import_database_backup_trust_bundle_use_case::import_database_backup_trust_bundle(
+        state.secure_storage(),
+        &trust_bundle_path,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database backup trust import command failed");
         map_command_error(&error)
     })
 }
