@@ -17,7 +17,11 @@ import type { ManagedService } from "../../services/types/service.types";
 import {
   backupProjectDatabase,
   createProjectDatabaseMigration,
+  exportDatabaseBackupTrustBundle,
+  generateProjectDatabaseMigrationRollback,
+  getDatabaseBackupKeyManagementStatus,
   getDatabaseBackupSchedulerStatus,
+  importDatabaseBackupTrustBundle,
   installDatabaseBackupScheduler,
   listDatabaseBackupDestinations,
   listDatabaseBackupPolicies,
@@ -25,6 +29,7 @@ import {
   provisionProjectDatabase,
   restoreProjectDatabaseToPointInTime,
   restoreProjectDatabase,
+  restoreProjectDatabaseWithReplay,
   rollbackProjectDatabaseMigrations,
   runDueDatabaseBackups,
   runProjectDatabaseMigrations,
@@ -39,12 +44,14 @@ import { PostgresStatusPanel } from "../components/postgres-status-panel";
 import type {
   DatabaseProvisioningResult,
   DatabaseBackupOptions,
+  DatabaseBackupKeyManagementStatus,
   DatabaseBackupPolicy,
   DatabaseBackupPolicyUpdate,
   DatabaseBackupRemoteDestination,
   DatabaseBackupRemoteDestinationUpdate,
   DatabaseBackupSchedulerStatus,
   DatabaseType,
+  DatabaseMigrationRollbackGenerationResult,
   ManagedDatabaseDependencyStatus,
   ManagedDatabasePackage,
   ProjectDatabaseProfile,
@@ -55,18 +62,23 @@ const databaseTypes = ["mysql", "postgresql"] as const satisfies readonly Databa
 type ActionName =
   | "backup"
   | "migration:create"
+  | "migration:generateRollback"
   | "migration:rollback"
   | "migration:run"
   | "provision"
   | "remote:save"
   | "restore:pitr"
+  | "restore:replay"
   | "restore"
   | "schedule:save";
 type ActionKey =
   | `${ActionName}:${DatabaseType}`
   | "schedule:runDue"
   | "scheduler:install"
-  | "scheduler:uninstall";
+  | "scheduler:uninstall"
+  | "trust:export"
+  | "trust:import"
+  | "trust:refresh";
 
 const defaultBackupOptions: DatabaseBackupOptions = {
   compression: "gzip",
@@ -83,6 +95,7 @@ const defaultPolicyInput: DatabaseBackupPolicyUpdate = {
 const defaultRemoteDestinationInput: DatabaseBackupRemoteDestinationUpdate = {
   destinationPath: "",
   enabled: false,
+  provider: "localPath",
 };
 
 export function DatabasesPage() {
@@ -90,6 +103,8 @@ export function DatabasesPage() {
   const isBackupSweepRunning = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
+  const [keyManagementStatus, setKeyManagementStatus] =
+    useState<DatabaseBackupKeyManagementStatus>();
   const [backupOptions, setBackupOptions] = useState<Record<DatabaseType, DatabaseBackupOptions>>({
     mysql: defaultBackupOptions,
     postgresql: defaultBackupOptions,
@@ -118,6 +133,19 @@ export function DatabasesPage() {
     mysql: "",
     postgresql: "",
   });
+  const [replaySourcePaths, setReplaySourcePaths] = useState<Record<DatabaseType, string>>({
+    mysql: "",
+    postgresql: "",
+  });
+  const [rollbackGenerationPaths, setRollbackGenerationPaths] = useState<
+    Record<DatabaseType, string>
+  >({
+    mysql: "",
+    postgresql: "",
+  });
+  const [rollbackGenerationResults, setRollbackGenerationResults] = useState<
+    Partial<Record<DatabaseType, DatabaseMigrationRollbackGenerationResult>>
+  >({});
   const [rollbackSteps, setRollbackSteps] = useState<Record<DatabaseType, number>>({
     mysql: 1,
     postgresql: 1,
@@ -241,10 +269,21 @@ export function DatabasesPage() {
     }
   }, []);
 
+  const loadKeyManagementStatus = useCallback(async () => {
+    try {
+      setKeyManagementStatus(await getDatabaseBackupKeyManagementStatus());
+    } catch (error) {
+      setErrorMessage(
+        getErrorMessage(error, "Database backup key status could not be loaded safely."),
+      );
+    }
+  }, []);
+
   useEffect(() => {
     void loadInventory();
     void loadSchedulerStatus();
-  }, [loadInventory, loadSchedulerStatus]);
+    void loadKeyManagementStatus();
+  }, [loadInventory, loadKeyManagementStatus, loadSchedulerStatus]);
 
   useEffect(() => {
     void loadProfiles(selectedProjectId);
@@ -409,6 +448,30 @@ export function DatabasesPage() {
     })();
   };
 
+  const pickReplaySourcePath = (databaseType: DatabaseType) => {
+    void (async () => {
+      setErrorMessage(undefined);
+
+      try {
+        const selectedPath = await open({
+          directory: true,
+          multiple: false,
+        });
+
+        if (typeof selectedPath === "string") {
+          setReplaySourcePaths((currentPaths) => ({
+            ...currentPaths,
+            [databaseType]: selectedPath,
+          }));
+        }
+      } catch (error) {
+        setErrorMessage(
+          getErrorMessage(error, "Replay directory picker could not be opened safely."),
+        );
+      }
+    })();
+  };
+
   const restoreDatabase = (databaseType: DatabaseType) => {
     if (!selectedProjectId) {
       return;
@@ -456,6 +519,34 @@ export function DatabasesPage() {
       ]
         .filter(Boolean)
         .join(" ");
+    });
+  };
+
+  const restoreWithReplay = (databaseType: DatabaseType) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    const baseBackupPath = restorePaths[databaseType].trim();
+    const replaySourcePath = replaySourcePaths[databaseType].trim();
+    const targetTime = pointInTimeTargetToIso(pointInTimeTargets[databaseType]);
+
+    void runAction(`restore:replay:${databaseType}`, async () => {
+      const result = await restoreProjectDatabaseWithReplay(
+        selectedProjectId,
+        databaseType,
+        baseBackupPath,
+        replaySourcePath,
+        targetTime,
+      );
+
+      return [
+        result.statusMessage,
+        `Base: ${result.restore.restoredFromPath}`,
+        result.replayedLogPaths.length > 0
+          ? `Replayed ${result.replayedLogPaths.length} segment(s).`
+          : "No replay segments matched the target.",
+      ].join(" ");
     });
   };
 
@@ -531,6 +622,97 @@ export function DatabasesPage() {
       );
       return `${result.statusMessage} ${result.migrationPath}`;
     });
+  };
+
+  const pickMigrationForRollbackGeneration = (databaseType: DatabaseType) => {
+    void (async () => {
+      setErrorMessage(undefined);
+
+      try {
+        const selectedPath = await open({
+          directory: false,
+          filters: [{ extensions: ["sql"], name: "SQL migration" }],
+          multiple: false,
+        });
+
+        if (typeof selectedPath === "string") {
+          setRollbackGenerationPaths((currentPaths) => ({
+            ...currentPaths,
+            [databaseType]: selectedPath,
+          }));
+        }
+      } catch (error) {
+        setErrorMessage(
+          getErrorMessage(error, "Migration file picker could not be opened safely."),
+        );
+      }
+    })();
+  };
+
+  const generateRollbackSql = (databaseType: DatabaseType) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    const migrationPath = rollbackGenerationPaths[databaseType].trim();
+
+    void runAction(`migration:generateRollback:${databaseType}`, async () => {
+      const result = await generateProjectDatabaseMigrationRollback(
+        selectedProjectId,
+        databaseType,
+        migrationPath,
+      );
+      setRollbackGenerationResults((currentResults) => ({
+        ...currentResults,
+        [databaseType]: result,
+      }));
+
+      return [
+        result.statusMessage,
+        result.rollbackPath,
+        result.warnings.length > 0 ? `${result.warnings.length} warning(s).` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    });
+  };
+
+  const exportTrustBundle = () => {
+    void (async () => {
+      setErrorMessage(undefined);
+      const selectedPath = await open({ directory: true, multiple: false });
+
+      if (typeof selectedPath !== "string") {
+        return;
+      }
+
+      void runAction("trust:export", async () => {
+        const result = await exportDatabaseBackupTrustBundle(selectedPath);
+        await loadKeyManagementStatus();
+        return `${result.statusMessage} ${result.trustBundlePath}`;
+      });
+    })();
+  };
+
+  const importTrustBundle = () => {
+    void (async () => {
+      setErrorMessage(undefined);
+      const selectedPath = await open({
+        directory: false,
+        filters: [{ extensions: ["json"], name: "Backup trust bundle" }],
+        multiple: false,
+      });
+
+      if (typeof selectedPath !== "string") {
+        return;
+      }
+
+      void runAction("trust:import", async () => {
+        const result = await importDatabaseBackupTrustBundle(selectedPath);
+        await loadKeyManagementStatus();
+        return `${result.statusMessage} ${result.trustedSigningKeyFingerprint}`;
+      });
+    })();
   };
 
   const runMigrations = (databaseType: DatabaseType) => {
@@ -637,11 +819,47 @@ export function DatabasesPage() {
           >
             Remove OS scheduler
           </Button>
+          <Button
+            disabled={actionKey === "trust:refresh"}
+            onClick={() => void loadKeyManagementStatus()}
+            variant="secondary"
+          >
+            Refresh keys
+          </Button>
+          <Button
+            disabled={actionKey === "trust:export"}
+            onClick={exportTrustBundle}
+            variant="secondary"
+          >
+            Export trust bundle
+          </Button>
+          <Button
+            disabled={actionKey === "trust:import"}
+            onClick={importTrustBundle}
+            variant="secondary"
+          >
+            Import trust bundle
+          </Button>
         </div>
         {schedulerStatus ? (
           <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
             {schedulerStatus.statusMessage}
             {schedulerStatus.manifestPath ? ` Manifest: ${schedulerStatus.manifestPath}` : ""}
+          </p>
+        ) : null}
+        {keyManagementStatus ? (
+          <p className="border-l-2 border-voicebox-black pl-3 font-mono text-xs leading-relaxed text-voicebox-secondary">
+            {keyManagementStatus.statusMessage} Encryption:{" "}
+            {keyManagementStatus.encryptionKeySource}. Signing:{" "}
+            {keyManagementStatus.signingKeySource}. Trusted fingerprints:{" "}
+            {keyManagementStatus.trustedSigningKeyFingerprints.length}.
+            {keyManagementStatus.externalKmsProvider
+              ? ` KMS: ${keyManagementStatus.externalKmsProvider}${
+                  keyManagementStatus.externalKmsKeyId
+                    ? ` / ${keyManagementStatus.externalKmsKeyId}`
+                    : ""
+                }.`
+              : ""}
           </p>
         ) : null}
       </section>
@@ -830,6 +1048,7 @@ export function DatabasesPage() {
                 pointInTimeTarget={pointInTimeTargets[databaseType]}
                 ready={ready}
                 remoteDestination={remoteDestinationInputs[databaseType]}
+                replaySourcePath={replaySourcePaths[databaseType]}
                 rollbackSteps={rollbackSteps[databaseType]}
                 restorePath={restorePaths[databaseType]}
                 onBackup={() => backupDatabase(databaseType)}
@@ -840,6 +1059,7 @@ export function DatabasesPage() {
                   }))
                 }
                 onPickRestorePath={() => pickRestorePath(databaseType)}
+                onPickReplaySourcePath={() => pickReplaySourcePath(databaseType)}
                 onPolicyChange={(policy) =>
                   setScheduleInputs((currentInputs) => ({
                     ...currentInputs,
@@ -867,6 +1087,7 @@ export function DatabasesPage() {
                   }))
                 }
                 onRestore={() => restoreDatabase(databaseType)}
+                onReplayRestore={() => restoreWithReplay(databaseType)}
                 onSaveRemoteDestination={() => saveBackupDestination(databaseType)}
                 onSavePolicy={() => saveBackupPolicy(databaseType)}
               />
@@ -908,6 +1129,36 @@ export function DatabasesPage() {
                 >
                   Create migration
                 </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    disabled={!profile}
+                    onClick={() => pickMigrationForRollbackGeneration(databaseType)}
+                    variant="secondary"
+                  >
+                    Pick migration
+                  </Button>
+                  <Button
+                    disabled={
+                      !profile ||
+                      !rollbackGenerationPaths[databaseType].trim() ||
+                      actionKey === `migration:generateRollback:${databaseType}`
+                    }
+                    onClick={() => generateRollbackSql(databaseType)}
+                    variant="secondary"
+                  >
+                    Generate rollback
+                  </Button>
+                </div>
+                {rollbackGenerationPaths[databaseType] ? (
+                  <p className="break-all font-mono text-xs text-voicebox-secondary">
+                    {rollbackGenerationPaths[databaseType]}
+                  </p>
+                ) : null}
+                {rollbackGenerationResults[databaseType] ? (
+                  <p className="break-all font-mono text-xs text-voicebox-secondary">
+                    Rollback: {rollbackGenerationResults[databaseType]?.rollbackPath}
+                  </p>
+                ) : null}
               </div>
             </article>
           );
@@ -1050,6 +1301,7 @@ function remoteDestinationInputFromDestination(
   return {
     destinationPath: destination.destinationPath,
     enabled: destination.enabled,
+    provider: destination.provider,
   };
 }
 
@@ -1060,6 +1312,7 @@ function remoteDestinationStatus(destination: DatabaseBackupRemoteDestination | 
 
   return [
     destination.enabled ? "Remote copy enabled." : "Remote copy disabled.",
+    `Provider ${destination.provider}.`,
     `Destination ${destination.destinationPath || "not set"}.`,
     `Updated ${formatDate(destination.updatedAt)}.`,
   ].join(" ");

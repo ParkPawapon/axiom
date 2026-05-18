@@ -214,14 +214,29 @@ pub struct DatabaseBackupPolicyUpdateResult {
 pub struct DatabaseBackupRemoteDestination {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
+    #[serde(default)]
+    pub provider: DatabaseBackupRemoteDestinationProvider,
     pub enabled: bool,
     pub destination_path: String,
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseBackupRemoteDestinationProvider {
+    Gcs,
+    #[default]
+    LocalPath,
+    R2,
+    S3,
+    Sftp,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseBackupRemoteDestinationUpdate {
+    #[serde(default)]
+    pub provider: DatabaseBackupRemoteDestinationProvider,
     pub enabled: bool,
     pub destination_path: String,
 }
@@ -292,6 +307,18 @@ pub struct DatabaseMigrationRollbackResult {
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DatabaseMigrationRollbackGenerationResult {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub migration_path: String,
+    pub rollback_path: String,
+    pub generated_statements: Vec<String>,
+    pub warnings: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DatabasePointInTimeRestoreResult {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
@@ -299,5 +326,54 @@ pub struct DatabasePointInTimeRestoreResult {
     pub selected_backup_path: String,
     pub selected_backup_created_at: DateTime<Utc>,
     pub restore: DatabaseRestoreResult,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseContinuousReplayRestoreResult {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub base_backup_path: String,
+    pub replay_source_path: String,
+    pub target_time: Option<DateTime<Utc>>,
+    pub restore: DatabaseRestoreResult,
+    pub replayed_log_paths: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupKeyManagementStatus {
+    pub encryption_key_source: String,
+    pub signing_key_source: String,
+    pub external_kms_provider: Option<String>,
+    pub external_kms_key_id: Option<String>,
+    pub trusted_signing_key_fingerprints: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupTrustBundle {
+    pub version: u16,
+    pub algorithm: String,
+    pub signing_key_fingerprint: String,
+    pub exported_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupTrustExportResult {
+    pub trust_bundle_path: String,
+    pub signing_key_fingerprint: String,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupTrustImportResult {
+    pub trust_bundle_path: String,
+    pub trusted_signing_key_fingerprint: String,
     pub status_message: String,
 }

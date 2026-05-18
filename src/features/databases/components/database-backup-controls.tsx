@@ -16,17 +16,20 @@ interface DatabaseBackupControlsProps {
   pointInTimeTarget: string;
   ready: boolean;
   remoteDestination: DatabaseBackupRemoteDestinationUpdate;
+  replaySourcePath: string;
   rollbackSteps: number;
   restorePath: string;
   onBackup: () => void;
   onBackupOptionsChange: (options: DatabaseBackupOptions) => void;
   onPickRestorePath: () => void;
+  onPickReplaySourcePath: () => void;
   onPolicyChange: (policy: DatabaseBackupPolicyUpdate) => void;
   onPointInTimeRestore: () => void;
   onRemoteDestinationChange: (destination: DatabaseBackupRemoteDestinationUpdate) => void;
   onRollbackMigrations: () => void;
   onRollbackStepsChange: (steps: number) => void;
   onRestore: () => void;
+  onReplayRestore: () => void;
   onPointInTimeTargetChange: (target: string) => void;
   onSaveRemoteDestination: () => void;
   onSavePolicy: () => void;
@@ -39,6 +42,7 @@ export function DatabaseBackupControls({
   onBackup,
   onBackupOptionsChange,
   onPickRestorePath,
+  onPickReplaySourcePath,
   onPolicyChange,
   onPointInTimeRestore,
   onPointInTimeTargetChange,
@@ -46,12 +50,14 @@ export function DatabaseBackupControls({
   onRollbackMigrations,
   onRollbackStepsChange,
   onRestore,
+  onReplayRestore,
   onSaveRemoteDestination,
   onSavePolicy,
   policy,
   pointInTimeTarget,
   ready,
   remoteDestination,
+  replaySourcePath,
   rollbackSteps,
   restorePath,
 }: DatabaseBackupControlsProps) {
@@ -141,6 +147,31 @@ export function DatabaseBackupControls({
       ) : null}
 
       <div className="grid gap-3 border-t border-voicebox-border pt-3">
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={!ready} onClick={onPickReplaySourcePath} variant="secondary">
+            Pick replay directory
+          </Button>
+          <Button
+            disabled={
+              !ready ||
+              !restorePath.trim() ||
+              !replaySourcePath.trim() ||
+              actionKey === `restore:replay:${databaseType}`
+            }
+            onClick={onReplayRestore}
+            variant="secondary"
+          >
+            Restore with replay
+          </Button>
+        </div>
+        {replaySourcePath ? (
+          <p className="break-all font-mono text-xs text-voicebox-secondary">
+            Replay: {replaySourcePath}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 border-t border-voicebox-border pt-3">
         <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
           Point-in-time target
           <Input
@@ -176,7 +207,25 @@ export function DatabaseBackupControls({
           Remote destination enabled
         </label>
         <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
-          Mounted destination path
+          Destination provider
+          <Select
+            value={remoteDestination.provider}
+            onChange={(event) =>
+              onRemoteDestinationChange({
+                ...remoteDestination,
+                provider: event.target.value as DatabaseBackupRemoteDestinationUpdate["provider"],
+              })
+            }
+          >
+            <option value="localPath">Mounted path</option>
+            <option value="s3">S3</option>
+            <option value="r2">R2</option>
+            <option value="gcs">GCS</option>
+            <option value="sftp">SFTP</option>
+          </Select>
+        </label>
+        <label className="grid gap-2 text-sm font-semibold text-voicebox-black">
+          Destination
           <Input
             value={remoteDestination.destinationPath}
             onChange={(event) =>
@@ -185,7 +234,7 @@ export function DatabaseBackupControls({
                 destinationPath: event.target.value,
               })
             }
-            placeholder="/Volumes/backups/axiomphp"
+            placeholder={destinationPlaceholder(remoteDestination.provider)}
           />
         </label>
         <Button
@@ -263,4 +312,20 @@ export function DatabaseBackupControls({
       </div>
     </section>
   );
+}
+
+function destinationPlaceholder(provider: DatabaseBackupRemoteDestinationUpdate["provider"]) {
+  if (provider === "s3" || provider === "r2") {
+    return "s3://bucket/prefix";
+  }
+
+  if (provider === "gcs") {
+    return "gs://bucket/prefix";
+  }
+
+  if (provider === "sftp") {
+    return "sftp://user@example.com/backups";
+  }
+
+  return "/Volumes/backups/axiomphp";
 }

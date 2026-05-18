@@ -1,6 +1,7 @@
 import { invokeTauriCommand } from "../../../core/api/tauri-client";
 import type {
   DatabaseBackupOptions,
+  DatabaseBackupKeyManagementStatus,
   DatabaseBackupPolicy,
   DatabaseBackupPolicyUpdate,
   DatabaseBackupPolicyUpdateResult,
@@ -10,7 +11,11 @@ import type {
   DatabaseBackupResult,
   DatabaseBackupSchedulerInstallResult,
   DatabaseBackupSchedulerStatus,
+  DatabaseBackupTrustExportResult,
+  DatabaseBackupTrustImportResult,
+  DatabaseContinuousReplayRestoreResult,
   DatabaseMigrationFile,
+  DatabaseMigrationRollbackGenerationResult,
   DatabaseMigrationRollbackResult,
   DatabaseMigrationRunResult,
   DatabasePointInTimeRestoreResult,
@@ -96,6 +101,26 @@ export function getDatabaseBackupSchedulerStatus() {
   return invokeTauriCommand<DatabaseBackupSchedulerStatus>("get_database_backup_scheduler_status");
 }
 
+export function getDatabaseBackupKeyManagementStatus() {
+  return invokeTauriCommand<DatabaseBackupKeyManagementStatus>(
+    "get_database_backup_key_management_status",
+  );
+}
+
+export function exportDatabaseBackupTrustBundle(outputDir: string) {
+  return invokeTauriCommand<DatabaseBackupTrustExportResult>(
+    "export_database_backup_trust_bundle",
+    { outputDir },
+  );
+}
+
+export function importDatabaseBackupTrustBundle(trustBundlePath: string) {
+  return invokeTauriCommand<DatabaseBackupTrustImportResult>(
+    "import_database_backup_trust_bundle",
+    { trustBundlePath },
+  );
+}
+
 export function installDatabaseBackupScheduler() {
   return invokeTauriCommand<DatabaseBackupSchedulerInstallResult>(
     "install_database_backup_scheduler",
@@ -135,6 +160,25 @@ export function restoreProjectDatabaseToPointInTime(
   );
 }
 
+export function restoreProjectDatabaseWithReplay(
+  projectId: string,
+  databaseType: DatabaseType,
+  baseBackupPath: string,
+  replaySourcePath: string,
+  targetTime?: string,
+) {
+  return invokeTauriCommand<DatabaseContinuousReplayRestoreResult>(
+    "restore_project_database_with_replay",
+    {
+      baseBackupPath,
+      databaseType,
+      projectId,
+      replaySourcePath,
+      targetTime,
+    },
+  );
+}
+
 export function createProjectDatabaseMigration(
   projectId: string,
   databaseType: DatabaseType,
@@ -158,6 +202,21 @@ export function rollbackProjectDatabaseMigrations(
       databaseType,
       projectId,
       steps,
+    },
+  );
+}
+
+export function generateProjectDatabaseMigrationRollback(
+  projectId: string,
+  databaseType: DatabaseType,
+  migrationPath: string,
+) {
+  return invokeTauriCommand<DatabaseMigrationRollbackGenerationResult>(
+    "generate_project_database_migration_rollback",
+    {
+      databaseType,
+      migrationPath,
+      projectId,
     },
   );
 }

@@ -6,7 +6,8 @@ use chrono::Utc;
 use directories::ProjectDirs;
 
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseContinuousReplayRestoreResult,
+    DatabaseMigrationFile, DatabaseMigrationRollbackGenerationResult,
     DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
     DatabaseProvisioningStatus, DatabaseRestoreResult, ProjectDatabaseProfile,
 };
@@ -22,9 +23,9 @@ use super::backup_artifacts::{
     cleanup_restore_artifact, finalize_backup_artifact, prepare_restore_artifact,
 };
 use super::database_cli::{
-    create_database_resources, run_mysql_backup, run_mysql_restore, run_mysql_script,
-    run_postgres_backup, run_postgres_restore, run_postgres_script, ProvisioningAttemptError,
-    MIGRATION_TIMEOUT,
+    create_database_resources, run_mysql_backup, run_mysql_binlog_export, run_mysql_restore,
+    run_mysql_script, run_postgres_backup, run_postgres_restore, run_postgres_script,
+    ProvisioningAttemptError, MIGRATION_TIMEOUT,
 };
 use super::database_identifiers::sanitize_migration_name;
 use super::database_identifiers::{
@@ -237,6 +238,57 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         })
     }
 
+    fn restore_project_database_with_replay(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        base_backup_path: &str,
+        replay_source_path: &str,
+        target_time: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<DatabaseContinuousReplayRestoreResult> {
+        ensure_profile_ready(profile)?;
+        let restore = self.restore_project_database(profile, base_backup_path)?;
+        let replay_log_paths =
+            collect_replay_log_files(replay_source_path, profile.database_type, target_time)?;
+        let password = self.password_for_profile(profile)?;
+        let replay_work_dir = replay_work_dir(profile)?;
+        fs::create_dir_all(&replay_work_dir).map_err(|error| {
+            AppError::Infrastructure(format!("failed to create replay work directory: {error}"))
+        })?;
+
+        let mut replayed_log_paths = Vec::new();
+        for replay_log_path in replay_log_paths {
+            let sql_path = prepare_replay_sql(profile, &replay_log_path, &replay_work_dir)?;
+
+            match profile.database_type {
+                DatabaseType::Mysql => {
+                    run_mysql_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+                }
+                DatabaseType::Postgresql => {
+                    run_postgres_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+                }
+            }
+
+            if sql_path.starts_with(&replay_work_dir) {
+                let _ = fs::remove_file(&sql_path);
+            }
+            replayed_log_paths.push(replay_log_path.to_string_lossy().into_owned());
+        }
+
+        Ok(DatabaseContinuousReplayRestoreResult {
+            project_id: profile.project_id.clone(),
+            database_type: profile.database_type,
+            base_backup_path: base_backup_path.to_string(),
+            replay_source_path: replay_source_path.to_string(),
+            target_time,
+            restore,
+            status_message: format!(
+                "Database restore completed and replayed {} recovery log segment(s).",
+                replayed_log_paths.len()
+            ),
+            replayed_log_paths,
+        })
+    }
+
     fn create_migration_file(
         &self,
         project_id: &ProjectId,
@@ -385,6 +437,34 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             rolled_back_migrations,
         })
     }
+
+    fn generate_migration_rollback(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        migration_path: &str,
+    ) -> AppResult<DatabaseMigrationRollbackGenerationResult> {
+        let migration_path = validate_migration_path(profile, migration_path)?;
+        let rollback_path = rollback_path_for_generated_migration(&migration_path)?;
+        let migration_sql = fs::read_to_string(&migration_path).map_err(|error| {
+            AppError::Infrastructure(format!("failed to read migration SQL: {error}"))
+        })?;
+        let generated = generate_rollback_sql(&migration_sql);
+
+        fs::write(&rollback_path, generated.contents()).map_err(|error| {
+            AppError::Infrastructure(format!("failed to write generated rollback SQL: {error}"))
+        })?;
+
+        Ok(DatabaseMigrationRollbackGenerationResult {
+            project_id: profile.project_id.clone(),
+            database_type: profile.database_type,
+            migration_path: migration_path.to_string_lossy().into_owned(),
+            rollback_path: rollback_path.to_string_lossy().into_owned(),
+            generated_statements: generated.statements,
+            warnings: generated.warnings,
+            status_message: "Rollback SQL was generated from reversible migration patterns."
+                .to_string(),
+        })
+    }
 }
 
 fn ensure_profile_ready(profile: &ProjectDatabaseProfile) -> AppResult<()> {
@@ -418,4 +498,279 @@ fn rollback_path_for(migration_dir: &std::path::Path, migration_name: &str) -> A
     }
 
     Ok(rollback_path)
+}
+
+fn replay_work_dir(profile: &ProjectDatabaseProfile) -> AppResult<PathBuf> {
+    let backup_dir = std::path::Path::new(&profile.backup_dir)
+        .canonicalize()
+        .map_err(|error| {
+            AppError::Validation(format!(
+                "backup directory must exist and be readable: {error}"
+            ))
+        })?;
+
+    Ok(backup_dir.join(".replay-work"))
+}
+
+fn collect_replay_log_files(
+    replay_source_path: &str,
+    database_type: DatabaseType,
+    target_time: Option<chrono::DateTime<Utc>>,
+) -> AppResult<Vec<PathBuf>> {
+    let replay_source_path =
+        validate_existing_directory(replay_source_path, "recovery replay source directory")?;
+    let mut replay_paths = Vec::new();
+
+    for entry in fs::read_dir(&replay_source_path).map_err(|error| {
+        AppError::Infrastructure(format!("failed to read recovery replay directory: {error}"))
+    })? {
+        let path = entry
+            .map_err(|error| {
+                AppError::Infrastructure(format!("failed to inspect recovery replay file: {error}"))
+            })?
+            .path();
+
+        if !path.is_file() || !is_replay_file(database_type, &path)? {
+            continue;
+        }
+
+        if let Some(target_time) = target_time {
+            let modified_at = path
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| {
+                    AppError::Infrastructure(format!(
+                        "failed to inspect recovery replay file metadata: {error}"
+                    ))
+                })?;
+            let modified_at = chrono::DateTime::<Utc>::from(modified_at);
+
+            if modified_at > target_time {
+                continue;
+            }
+        }
+
+        replay_paths.push(path);
+    }
+
+    replay_paths.sort();
+    Ok(replay_paths)
+}
+
+fn is_replay_file(database_type: DatabaseType, path: &std::path::Path) -> AppResult<bool> {
+    let file_name = path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.ends_with(".sql") {
+        return Ok(true);
+    }
+
+    match database_type {
+        DatabaseType::Mysql => Ok(file_name.ends_with(".binlog") || file_name.ends_with(".bin")),
+        DatabaseType::Postgresql if file_name.ends_with(".wal") => Err(AppError::Validation(
+            "PostgreSQL WAL physical replay requires server-level restore orchestration; provide WAL-derived .sql replay segments for this managed flow".to_string(),
+        )),
+        DatabaseType::Postgresql => Ok(false),
+    }
+}
+
+fn prepare_replay_sql(
+    profile: &ProjectDatabaseProfile,
+    replay_log_path: &std::path::Path,
+    replay_work_dir: &std::path::Path,
+) -> AppResult<PathBuf> {
+    let file_name = replay_log_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.ends_with(".sql") {
+        return Ok(replay_log_path.to_path_buf());
+    }
+
+    if profile.database_type != DatabaseType::Mysql {
+        return Err(AppError::Validation(
+            "only MySQL binlog files can be converted by the managed replay adapter".to_string(),
+        ));
+    }
+
+    let output_path = replay_work_dir.join(format!(
+        "{}.replay.sql",
+        replay_log_path
+            .file_stem()
+            .and_then(|file_stem| file_stem.to_str())
+            .unwrap_or("mysql-binlog")
+    ));
+    run_mysql_binlog_export(replay_log_path, &output_path)?;
+
+    Ok(output_path)
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct GeneratedRollbackSql {
+    statements: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl GeneratedRollbackSql {
+    fn contents(&self) -> String {
+        let mut contents =
+            "-- AxiomPHP generated migration rollback\n-- Review before running.\n\n".to_string();
+
+        for warning in &self.warnings {
+            contents.push_str("-- WARNING: ");
+            contents.push_str(warning);
+            contents.push('\n');
+        }
+
+        if !self.warnings.is_empty() {
+            contents.push('\n');
+        }
+
+        for statement in &self.statements {
+            contents.push_str(statement);
+            contents.push_str("\n");
+        }
+
+        contents
+    }
+}
+
+fn validate_migration_path(
+    profile: &ProjectDatabaseProfile,
+    migration_path: &str,
+) -> AppResult<PathBuf> {
+    let migration_dir = validate_existing_directory(&profile.migration_dir, "migration directory")?;
+    let migration_path = std::path::Path::new(migration_path.trim())
+        .canonicalize()
+        .map_err(|error| {
+            AppError::Validation(format!("migration path is not readable: {error}"))
+        })?;
+
+    if !migration_path.starts_with(&migration_dir) {
+        return Err(AppError::Validation(
+            "migration path must be inside the profile migration directory".to_string(),
+        ));
+    }
+
+    let file_name = migration_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default();
+
+    if !file_name.ends_with(".sql") || file_name.ends_with(".down.sql") {
+        return Err(AppError::Validation(
+            "migration path must point to a forward .sql file".to_string(),
+        ));
+    }
+
+    Ok(migration_path)
+}
+
+fn rollback_path_for_generated_migration(migration_path: &std::path::Path) -> AppResult<PathBuf> {
+    let file_name = migration_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .ok_or_else(|| AppError::Validation("migration path has no file name".to_string()))?;
+    let stem = file_name.strip_suffix(".sql").ok_or_else(|| {
+        AppError::Validation("migration path must point to a .sql file".to_string())
+    })?;
+
+    Ok(migration_path.with_file_name(format!("{stem}.down.sql")))
+}
+
+fn generate_rollback_sql(sql: &str) -> GeneratedRollbackSql {
+    let mut statements = Vec::new();
+    let mut warnings = Vec::new();
+
+    for statement in sql.split(';') {
+        let statement = statement.trim();
+        if statement.is_empty() || statement.starts_with("--") {
+            continue;
+        }
+
+        if let Some(rollback) = rollback_create_table(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_add_column(statement) {
+            statements.push(rollback);
+        } else {
+            warnings.push(format!(
+                "Unsupported migration statement was not auto-reversed: {}",
+                first_words(statement, 12)
+            ));
+        }
+    }
+
+    statements.reverse();
+
+    GeneratedRollbackSql {
+        statements,
+        warnings,
+    }
+}
+
+fn rollback_create_table(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3
+        || !tokens[0].eq_ignore_ascii_case("create")
+        || !tokens[1].eq_ignore_ascii_case("table")
+    {
+        return None;
+    }
+
+    let table_name = if tokens
+        .get(2)
+        .is_some_and(|token| token.eq_ignore_ascii_case("if"))
+    {
+        tokens.get(5)?
+    } else {
+        tokens.get(2)?
+    };
+
+    Some(format!(
+        "DROP TABLE IF EXISTS {};",
+        trim_identifier_suffix(table_name)
+    ))
+}
+
+fn rollback_add_column(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 6
+        || !tokens[0].eq_ignore_ascii_case("alter")
+        || !tokens[1].eq_ignore_ascii_case("table")
+        || !tokens[3].eq_ignore_ascii_case("add")
+    {
+        return None;
+    }
+
+    let column_index = if tokens
+        .get(4)
+        .is_some_and(|token| token.eq_ignore_ascii_case("column"))
+    {
+        5
+    } else {
+        4
+    };
+
+    Some(format!(
+        "ALTER TABLE {} DROP COLUMN {};",
+        trim_identifier_suffix(tokens[2]),
+        trim_identifier_suffix(tokens[column_index])
+    ))
+}
+
+fn trim_identifier_suffix(value: &str) -> &str {
+    value.trim_end_matches(|character| matches!(character, '(' | ',' | ';'))
+}
+
+fn first_words(value: &str, limit: usize) -> String {
+    value
+        .split_whitespace()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
