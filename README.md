@@ -2,7 +2,7 @@
 
 AxiomPHP is a production-oriented desktop application foundation for a modern local PHP development control center. The long-term goal is to provide a safer, cleaner replacement for XAMPP-style workflows while keeping services, projects, credentials, and operating-system actions behind explicit boundaries.
 
-Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, managed database provisioning, security controls, and backup/restore orchestration are available behind Rust application use cases and infrastructure ports.
+Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, managed database provisioning, security controls, backup/restore orchestration, and project Docker orchestration are available behind Rust application use cases and infrastructure ports.
 
 ## Problem Statement
 
@@ -43,6 +43,8 @@ Future implementation must keep Rust as the security boundary between UI intent 
 - Run package-manager installation only after explicit frontend confirmation.
 - Keep package-manager command arguments backend-owned and version-catalog based.
 - Keep backup encryption and signing keys in secure storage or explicit external key environment variables.
+- Require digest-pinned Docker image references before starting project containers.
+- Keep Docker CLI execution behind backend allowlists and sanitized log readers.
 - Verify signed backup artifacts before managed restore when a signature sidecar exists.
 - Run OS-level background backup scheduling through app-owned launch/task adapters only.
 - Never expose secrets in frontend logs or serialized command errors.
@@ -60,10 +62,8 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 
 - Project-based PHP environment configuration
 - Project process switching and runtime supervision
-- Cloud remote backup providers
-- Continuous WAL/binlog point-in-time recovery
-- External KMS-backed backup keys
-- Cross-machine backup trust workflows
+- User-facing Docker image pin management
+- Per-project container resource limits
 - Port conflict detection
 - Environment profile management
 - Logs viewer and service health status
@@ -114,4 +114,4 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 
 ## Not Implemented Yet
 
-The backup/restore layer now supports managed artifacts, file picker restore, scheduled policies, OS scheduler installation, mounted and cloud CLI remote destinations, point-in-time snapshot restore, replay restore, migration rollback files, conservative rollback SQL generation, trust bundle enrollment, retention, compression, encryption, and HMAC signing. It does not yet provide native cloud SDK uploads, PostgreSQL physical WAL server restore orchestration, semantic rollback generation for complex SQL, direct KMS API envelope encryption, or cross-machine decryption without shared external key material.
+The backup/restore layer now supports managed artifacts, file picker restore, scheduled policies, OS scheduler installation, mounted and cloud CLI remote destinations, point-in-time snapshot restore, replay restore, migration rollback files, conservative rollback SQL generation, trust bundle enrollment, retention, compression, encryption, and HMAC signing. The Docker layer now supports per-project Compose plans, PHP/MySQL/PostgreSQL/reverse proxy profiles, project volume lifecycle, digest-pinned image trust gates, Docker Desktop diagnostics, and sanitized Docker log reads. It does not yet provide native cloud SDK uploads, PostgreSQL physical WAL server restore orchestration, semantic rollback generation for complex SQL, direct KMS API envelope encryption, cross-machine decryption without shared external key material, native registry trust metadata, user-facing image digest resolution, or per-container resource limit management.
