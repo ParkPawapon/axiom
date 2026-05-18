@@ -1,4 +1,5 @@
 pub mod databases;
+pub mod docker;
 pub mod logs;
 pub mod projects;
 pub mod runtimes;
