@@ -214,14 +214,29 @@ pub struct DatabaseBackupPolicyUpdateResult {
 pub struct DatabaseBackupRemoteDestination {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
+    #[serde(default)]
+    pub provider: DatabaseBackupRemoteDestinationProvider,
     pub enabled: bool,
     pub destination_path: String,
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseBackupRemoteDestinationProvider {
+    Gcs,
+    #[default]
+    LocalPath,
+    R2,
+    S3,
+    Sftp,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseBackupRemoteDestinationUpdate {
+    #[serde(default)]
+    pub provider: DatabaseBackupRemoteDestinationProvider,
     pub enabled: bool,
     pub destination_path: String,
 }
