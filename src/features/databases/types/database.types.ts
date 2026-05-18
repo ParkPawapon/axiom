@@ -4,6 +4,7 @@ export type DatabaseProvisioningStatus = "failed" | "pending" | "ready";
 export type ManagedDatabaseDependencyStatus = "installed" | "pending";
 export type DatabaseBackupCompression = "gzip" | "none";
 export type DatabaseBackupEncryption = "aes256Gcm" | "none";
+export type DatabaseBackupRemoteDestinationProvider = "gcs" | "localPath" | "r2" | "s3" | "sftp";
 
 export interface ProjectDatabaseProfile {
   readonly projectId: string;
@@ -125,12 +126,14 @@ export interface DatabaseBackupPolicyUpdateResult {
 export interface DatabaseBackupRemoteDestination {
   readonly projectId: string;
   readonly databaseType: DatabaseType;
+  readonly provider: DatabaseBackupRemoteDestinationProvider;
   readonly enabled: boolean;
   readonly destinationPath: string;
   readonly updatedAt: string;
 }
 
 export interface DatabaseBackupRemoteDestinationUpdate {
+  readonly provider: DatabaseBackupRemoteDestinationProvider;
   readonly enabled: boolean;
   readonly destinationPath: string;
 }
@@ -185,6 +188,16 @@ export interface DatabaseMigrationRollbackResult {
   readonly statusMessage: string;
 }
 
+export interface DatabaseMigrationRollbackGenerationResult {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly migrationPath: string;
+  readonly rollbackPath: string;
+  readonly generatedStatements: string[];
+  readonly warnings: string[];
+  readonly statusMessage: string;
+}
+
 export interface DatabasePointInTimeRestoreResult {
   readonly projectId: string;
   readonly databaseType: DatabaseType;
@@ -192,5 +205,37 @@ export interface DatabasePointInTimeRestoreResult {
   readonly selectedBackupPath: string;
   readonly selectedBackupCreatedAt: string;
   readonly restore: DatabaseRestoreResult;
+  readonly statusMessage: string;
+}
+
+export interface DatabaseContinuousReplayRestoreResult {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly baseBackupPath: string;
+  readonly replaySourcePath: string;
+  readonly targetTime?: string | null;
+  readonly restore: DatabaseRestoreResult;
+  readonly replayedLogPaths: string[];
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupKeyManagementStatus {
+  readonly encryptionKeySource: string;
+  readonly signingKeySource: string;
+  readonly externalKmsProvider?: string | null;
+  readonly externalKmsKeyId?: string | null;
+  readonly trustedSigningKeyFingerprints: string[];
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupTrustExportResult {
+  readonly trustBundlePath: string;
+  readonly signingKeyFingerprint: string;
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupTrustImportResult {
+  readonly trustBundlePath: string;
+  readonly trustedSigningKeyFingerprint: string;
   readonly statusMessage: string;
 }
