@@ -125,6 +125,21 @@ pub fn run_mysql_script(
     )
 }
 
+pub fn run_mysql_binlog_export(
+    binlog_path: &Path,
+    sql_output_path: &Path,
+) -> AppResult<ProcessOutput> {
+    run_database_command(
+        "mysqlbinlog",
+        ProcessCommand::new("mysqlbinlog").args([
+            "--result-file",
+            &sql_output_path.to_string_lossy(),
+            &binlog_path.to_string_lossy(),
+        ]),
+        BACKUP_RESTORE_TIMEOUT,
+    )
+}
+
 pub fn run_postgres_script(
     profile: &ProjectDatabaseProfile,
     password: &str,

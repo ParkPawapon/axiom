@@ -1,5 +1,6 @@
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseContinuousReplayRestoreResult,
+    DatabaseMigrationFile, DatabaseMigrationRollbackGenerationResult,
     DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
     DatabaseRestoreResult, ProjectDatabaseProfile,
 };
@@ -27,6 +28,14 @@ pub trait DatabaseProvisioner: Send + Sync {
         backup_path: &str,
     ) -> AppResult<DatabaseRestoreResult>;
 
+    fn restore_project_database_with_replay(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        base_backup_path: &str,
+        replay_source_path: &str,
+        target_time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> AppResult<DatabaseContinuousReplayRestoreResult>;
+
     fn create_migration_file(
         &self,
         project_id: &ProjectId,
@@ -45,4 +54,10 @@ pub trait DatabaseProvisioner: Send + Sync {
         profile: &ProjectDatabaseProfile,
         steps: u16,
     ) -> AppResult<DatabaseMigrationRollbackResult>;
+
+    fn generate_migration_rollback(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        migration_path: &str,
+    ) -> AppResult<DatabaseMigrationRollbackGenerationResult>;
 }

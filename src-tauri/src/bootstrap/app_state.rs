@@ -61,6 +61,7 @@ pub struct AppState {
     project_php_process_manager: Arc<dyn ProjectPhpProcessManager>,
     project_repository: Arc<dyn ProjectRepository>,
     project_runtime_repository: Arc<dyn ProjectRuntimeRepository>,
+    secure_storage: Arc<dyn SecureStorage>,
     service_manager: Arc<dyn ServiceManager>,
 }
 
@@ -71,7 +72,7 @@ impl AppState {
         let project_repository =
             Arc::new(FileProjectRepository::new()?) as Arc<dyn ProjectRepository>;
         let secure_storage = Arc::new(KeychainStorage::new()) as Arc<dyn SecureStorage>;
-        let database_provisioner = Arc::new(LocalDatabaseProvisioner::new(secure_storage)?)
+        let database_provisioner = Arc::new(LocalDatabaseProvisioner::new(secure_storage.clone())?)
             as Arc<dyn DatabaseProvisioner>;
         let database_provisioning_repository = Arc::new(FileDatabaseProvisioningRepository::new()?)
             as Arc<dyn DatabaseProvisioningRepository>;
@@ -102,6 +103,7 @@ impl AppState {
             project_php_process_manager: Arc::new(LocalProjectPhpProcessManager::new()?),
             project_repository,
             project_runtime_repository,
+            secure_storage,
             service_manager: Arc::new(LocalServiceManager::new()),
         })
     }
@@ -174,6 +176,10 @@ impl AppState {
 
     pub fn project_runtime_repository(&self) -> &dyn ProjectRuntimeRepository {
         self.project_runtime_repository.as_ref()
+    }
+
+    pub fn secure_storage(&self) -> &dyn SecureStorage {
+        self.secure_storage.as_ref()
     }
 
     pub fn service_manager(&self) -> &dyn ServiceManager {
