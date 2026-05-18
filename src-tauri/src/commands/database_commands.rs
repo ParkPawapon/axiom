@@ -10,6 +10,7 @@ use crate::application::databases::list_project_database_profiles_use_case;
 use crate::application::databases::provision_project_database_use_case;
 use crate::application::databases::restore_project_database_to_point_in_time_use_case;
 use crate::application::databases::restore_project_database_use_case;
+use crate::application::databases::restore_project_database_with_replay_use_case;
 use crate::application::databases::rollback_project_database_migrations_use_case;
 use crate::application::databases::run_due_database_backups_use_case;
 use crate::application::databases::run_project_database_migrations_use_case;
@@ -22,9 +23,9 @@ use crate::domain::database::database_config::{
     DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
     DatabaseBackupRemoteDestinationUpdate, DatabaseBackupRemoteDestinationUpdateResult,
     DatabaseBackupResult, DatabaseBackupSchedulerInstallResult, DatabaseBackupSchedulerStatus,
-    DatabaseMigrationFile, DatabaseMigrationRollbackResult, DatabaseMigrationRunResult,
-    DatabasePointInTimeRestoreResult, DatabaseProvisioningResult, DatabaseRestoreResult,
-    ProjectDatabaseProfile, ScheduledDatabaseBackupRunResult,
+    DatabaseContinuousReplayRestoreResult, DatabaseMigrationFile, DatabaseMigrationRollbackResult,
+    DatabaseMigrationRunResult, DatabasePointInTimeRestoreResult, DatabaseProvisioningResult,
+    DatabaseRestoreResult, ProjectDatabaseProfile, ScheduledDatabaseBackupRunResult,
 };
 use crate::shared::error::command_error_mapper::{map_command_error, CommandErrorPayload};
 
@@ -248,6 +249,30 @@ pub fn restore_project_database_to_point_in_time(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database point-in-time restore command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn restore_project_database_with_replay(
+    state: State<'_, AppState>,
+    project_id: String,
+    database_type: String,
+    base_backup_path: String,
+    replay_source_path: String,
+    target_time: Option<String>,
+) -> Result<DatabaseContinuousReplayRestoreResult, CommandErrorPayload> {
+    restore_project_database_with_replay_use_case::restore_project_database_with_replay(
+        state.database_provisioning_repository(),
+        state.database_provisioner(),
+        &project_id,
+        &database_type,
+        &base_backup_path,
+        &replay_source_path,
+        target_time,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database continuous replay restore command failed");
         map_command_error(&error)
     })
 }

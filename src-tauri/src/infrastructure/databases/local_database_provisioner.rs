@@ -6,9 +6,10 @@ use chrono::Utc;
 use directories::ProjectDirs;
 
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile,
-    DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
-    DatabaseProvisioningStatus, DatabaseRestoreResult, ProjectDatabaseProfile,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseContinuousReplayRestoreResult,
+    DatabaseMigrationFile, DatabaseMigrationRollbackResult, DatabaseMigrationRunResult,
+    DatabaseProvisioningResult, DatabaseProvisioningStatus, DatabaseRestoreResult,
+    ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
 use crate::domain::project::project::Project;
@@ -22,9 +23,9 @@ use super::backup_artifacts::{
     cleanup_restore_artifact, finalize_backup_artifact, prepare_restore_artifact,
 };
 use super::database_cli::{
-    create_database_resources, run_mysql_backup, run_mysql_restore, run_mysql_script,
-    run_postgres_backup, run_postgres_restore, run_postgres_script, ProvisioningAttemptError,
-    MIGRATION_TIMEOUT,
+    create_database_resources, run_mysql_backup, run_mysql_binlog_export, run_mysql_restore,
+    run_mysql_script, run_postgres_backup, run_postgres_restore, run_postgres_script,
+    ProvisioningAttemptError, MIGRATION_TIMEOUT,
 };
 use super::database_identifiers::sanitize_migration_name;
 use super::database_identifiers::{
@@ -237,6 +238,57 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         })
     }
 
+    fn restore_project_database_with_replay(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        base_backup_path: &str,
+        replay_source_path: &str,
+        target_time: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<DatabaseContinuousReplayRestoreResult> {
+        ensure_profile_ready(profile)?;
+        let restore = self.restore_project_database(profile, base_backup_path)?;
+        let replay_log_paths =
+            collect_replay_log_files(replay_source_path, profile.database_type, target_time)?;
+        let password = self.password_for_profile(profile)?;
+        let replay_work_dir = replay_work_dir(profile)?;
+        fs::create_dir_all(&replay_work_dir).map_err(|error| {
+            AppError::Infrastructure(format!("failed to create replay work directory: {error}"))
+        })?;
+
+        let mut replayed_log_paths = Vec::new();
+        for replay_log_path in replay_log_paths {
+            let sql_path = prepare_replay_sql(profile, &replay_log_path, &replay_work_dir)?;
+
+            match profile.database_type {
+                DatabaseType::Mysql => {
+                    run_mysql_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+                }
+                DatabaseType::Postgresql => {
+                    run_postgres_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+                }
+            }
+
+            if sql_path.starts_with(&replay_work_dir) {
+                let _ = fs::remove_file(&sql_path);
+            }
+            replayed_log_paths.push(replay_log_path.to_string_lossy().into_owned());
+        }
+
+        Ok(DatabaseContinuousReplayRestoreResult {
+            project_id: profile.project_id.clone(),
+            database_type: profile.database_type,
+            base_backup_path: base_backup_path.to_string(),
+            replay_source_path: replay_source_path.to_string(),
+            target_time,
+            restore,
+            status_message: format!(
+                "Database restore completed and replayed {} recovery log segment(s).",
+                replayed_log_paths.len()
+            ),
+            replayed_log_paths,
+        })
+    }
+
     fn create_migration_file(
         &self,
         project_id: &ProjectId,
@@ -418,4 +470,114 @@ fn rollback_path_for(migration_dir: &std::path::Path, migration_name: &str) -> A
     }
 
     Ok(rollback_path)
+}
+
+fn replay_work_dir(profile: &ProjectDatabaseProfile) -> AppResult<PathBuf> {
+    let backup_dir = std::path::Path::new(&profile.backup_dir)
+        .canonicalize()
+        .map_err(|error| {
+            AppError::Validation(format!(
+                "backup directory must exist and be readable: {error}"
+            ))
+        })?;
+
+    Ok(backup_dir.join(".replay-work"))
+}
+
+fn collect_replay_log_files(
+    replay_source_path: &str,
+    database_type: DatabaseType,
+    target_time: Option<chrono::DateTime<Utc>>,
+) -> AppResult<Vec<PathBuf>> {
+    let replay_source_path =
+        validate_existing_directory(replay_source_path, "recovery replay source directory")?;
+    let mut replay_paths = Vec::new();
+
+    for entry in fs::read_dir(&replay_source_path).map_err(|error| {
+        AppError::Infrastructure(format!("failed to read recovery replay directory: {error}"))
+    })? {
+        let path = entry
+            .map_err(|error| {
+                AppError::Infrastructure(format!("failed to inspect recovery replay file: {error}"))
+            })?
+            .path();
+
+        if !path.is_file() || !is_replay_file(database_type, &path)? {
+            continue;
+        }
+
+        if let Some(target_time) = target_time {
+            let modified_at = path
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| {
+                    AppError::Infrastructure(format!(
+                        "failed to inspect recovery replay file metadata: {error}"
+                    ))
+                })?;
+            let modified_at = chrono::DateTime::<Utc>::from(modified_at);
+
+            if modified_at > target_time {
+                continue;
+            }
+        }
+
+        replay_paths.push(path);
+    }
+
+    replay_paths.sort();
+    Ok(replay_paths)
+}
+
+fn is_replay_file(database_type: DatabaseType, path: &std::path::Path) -> AppResult<bool> {
+    let file_name = path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.ends_with(".sql") {
+        return Ok(true);
+    }
+
+    match database_type {
+        DatabaseType::Mysql => Ok(file_name.ends_with(".binlog") || file_name.ends_with(".bin")),
+        DatabaseType::Postgresql if file_name.ends_with(".wal") => Err(AppError::Validation(
+            "PostgreSQL WAL physical replay requires server-level restore orchestration; provide WAL-derived .sql replay segments for this managed flow".to_string(),
+        )),
+        DatabaseType::Postgresql => Ok(false),
+    }
+}
+
+fn prepare_replay_sql(
+    profile: &ProjectDatabaseProfile,
+    replay_log_path: &std::path::Path,
+    replay_work_dir: &std::path::Path,
+) -> AppResult<PathBuf> {
+    let file_name = replay_log_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.ends_with(".sql") {
+        return Ok(replay_log_path.to_path_buf());
+    }
+
+    if profile.database_type != DatabaseType::Mysql {
+        return Err(AppError::Validation(
+            "only MySQL binlog files can be converted by the managed replay adapter".to_string(),
+        ));
+    }
+
+    let output_path = replay_work_dir.join(format!(
+        "{}.replay.sql",
+        replay_log_path
+            .file_stem()
+            .and_then(|file_stem| file_stem.to_str())
+            .unwrap_or("mysql-binlog")
+    ));
+    run_mysql_binlog_export(replay_log_path, &output_path)?;
+
+    Ok(output_path)
 }

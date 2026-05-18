@@ -12,6 +12,7 @@ pub mod list_project_database_profiles_use_case;
 pub mod provision_project_database_use_case;
 pub mod restore_project_database_to_point_in_time_use_case;
 pub mod restore_project_database_use_case;
+pub mod restore_project_database_with_replay_use_case;
 pub mod rollback_project_database_migrations_use_case;
 pub mod run_due_database_backups_use_case;
 pub mod run_project_database_migrations_use_case;

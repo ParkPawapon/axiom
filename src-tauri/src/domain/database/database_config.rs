@@ -316,3 +316,16 @@ pub struct DatabasePointInTimeRestoreResult {
     pub restore: DatabaseRestoreResult,
     pub status_message: String,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseContinuousReplayRestoreResult {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub base_backup_path: String,
+    pub replay_source_path: String,
+    pub target_time: Option<DateTime<Utc>>,
+    pub restore: DatabaseRestoreResult,
+    pub replayed_log_paths: Vec<String>,
+    pub status_message: String,
+}

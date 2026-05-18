@@ -1,7 +1,7 @@
 use crate::domain::database::database_config::{
-    DatabaseBackupOptions, DatabaseBackupResult, DatabaseMigrationFile,
-    DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
-    DatabaseRestoreResult, ProjectDatabaseProfile,
+    DatabaseBackupOptions, DatabaseBackupResult, DatabaseContinuousReplayRestoreResult,
+    DatabaseMigrationFile, DatabaseMigrationRollbackResult, DatabaseMigrationRunResult,
+    DatabaseProvisioningResult, DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
 use crate::domain::project::project::Project;
@@ -26,6 +26,14 @@ pub trait DatabaseProvisioner: Send + Sync {
         profile: &ProjectDatabaseProfile,
         backup_path: &str,
     ) -> AppResult<DatabaseRestoreResult>;
+
+    fn restore_project_database_with_replay(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        base_backup_path: &str,
+        replay_source_path: &str,
+        target_time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> AppResult<DatabaseContinuousReplayRestoreResult>;
 
     fn create_migration_file(
         &self,
