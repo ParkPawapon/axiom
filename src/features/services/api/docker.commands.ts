@@ -13,10 +13,7 @@ export function getDockerDiagnostics() {
   return invokeTauriCommand<DockerDiagnosticsReport>("get_docker_diagnostics");
 }
 
-export function generateProjectDockerCompose(
-  projectId: string,
-  profiles: DockerComposeProfile[],
-) {
+export function generateProjectDockerCompose(projectId: string, profiles: DockerComposeProfile[]) {
   return invokeTauriCommand<DockerProjectComposePlan>("generate_project_docker_compose", {
     projectId,
     profiles,
@@ -29,10 +26,7 @@ export function getProjectDockerStatus(projectId: string) {
   });
 }
 
-export function startProjectDockerServices(
-  projectId: string,
-  profiles: DockerComposeProfile[],
-) {
+export function startProjectDockerServices(projectId: string, profiles: DockerComposeProfile[]) {
   return invokeTauriCommand<DockerProjectActionResult>("start_project_docker_services", {
     projectId,
     profiles,
@@ -45,36 +39,24 @@ export function stopProjectDockerServices(projectId: string) {
   });
 }
 
-export function restartProjectDockerServices(
-  projectId: string,
-  profiles: DockerComposeProfile[],
-) {
+export function restartProjectDockerServices(projectId: string, profiles: DockerComposeProfile[]) {
   return invokeTauriCommand<DockerProjectActionResult>("restart_project_docker_services", {
     projectId,
     profiles,
   });
 }
 
-export function ensureProjectDockerVolumes(
-  projectId: string,
-  profiles: DockerComposeProfile[],
-) {
-  return invokeTauriCommand<DockerProjectVolumeLifecycleResult>(
-    "ensure_project_docker_volumes",
-    {
-      projectId,
-      profiles,
-    },
-  );
+export function ensureProjectDockerVolumes(projectId: string, profiles: DockerComposeProfile[]) {
+  return invokeTauriCommand<DockerProjectVolumeLifecycleResult>("ensure_project_docker_volumes", {
+    projectId,
+    profiles,
+  });
 }
 
 export function removeProjectDockerVolumes(projectId: string) {
-  return invokeTauriCommand<DockerProjectVolumeLifecycleResult>(
-    "remove_project_docker_volumes",
-    {
-      projectId,
-    },
-  );
+  return invokeTauriCommand<DockerProjectVolumeLifecycleResult>("remove_project_docker_volumes", {
+    projectId,
+  });
 }
 
 export function readProjectDockerLogs(projectId: string, tailLines: number) {
