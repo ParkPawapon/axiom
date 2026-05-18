@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::application::databases::backup_project_database_use_case;
 use crate::application::databases::create_project_database_migration_use_case;
+use crate::application::databases::generate_project_database_migration_rollback_use_case;
 use crate::application::databases::get_database_backup_scheduler_status_use_case;
 use crate::application::databases::install_database_backup_scheduler_use_case;
 use crate::application::databases::list_database_backup_destinations_use_case;
@@ -23,7 +24,8 @@ use crate::domain::database::database_config::{
     DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
     DatabaseBackupRemoteDestinationUpdate, DatabaseBackupRemoteDestinationUpdateResult,
     DatabaseBackupResult, DatabaseBackupSchedulerInstallResult, DatabaseBackupSchedulerStatus,
-    DatabaseContinuousReplayRestoreResult, DatabaseMigrationFile, DatabaseMigrationRollbackResult,
+    DatabaseContinuousReplayRestoreResult, DatabaseMigrationFile,
+    DatabaseMigrationRollbackGenerationResult, DatabaseMigrationRollbackResult,
     DatabaseMigrationRunResult, DatabasePointInTimeRestoreResult, DatabaseProvisioningResult,
     DatabaseRestoreResult, ProjectDatabaseProfile, ScheduledDatabaseBackupRunResult,
 };
@@ -293,6 +295,26 @@ pub fn create_project_database_migration(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database migration file command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn generate_project_database_migration_rollback(
+    state: State<'_, AppState>,
+    project_id: String,
+    database_type: String,
+    migration_path: String,
+) -> Result<DatabaseMigrationRollbackGenerationResult, CommandErrorPayload> {
+    generate_project_database_migration_rollback_use_case::generate_project_database_migration_rollback(
+        state.database_provisioning_repository(),
+        state.database_provisioner(),
+        &project_id,
+        &database_type,
+        &migration_path,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database migration rollback generation command failed");
         map_command_error(&error)
     })
 }

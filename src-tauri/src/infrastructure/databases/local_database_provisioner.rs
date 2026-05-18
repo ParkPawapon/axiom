@@ -7,9 +7,9 @@ use directories::ProjectDirs;
 
 use crate::domain::database::database_config::{
     DatabaseBackupOptions, DatabaseBackupResult, DatabaseContinuousReplayRestoreResult,
-    DatabaseMigrationFile, DatabaseMigrationRollbackResult, DatabaseMigrationRunResult,
-    DatabaseProvisioningResult, DatabaseProvisioningStatus, DatabaseRestoreResult,
-    ProjectDatabaseProfile,
+    DatabaseMigrationFile, DatabaseMigrationRollbackGenerationResult,
+    DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
+    DatabaseProvisioningStatus, DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
 use crate::domain::project::project::Project;
@@ -437,6 +437,34 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             rolled_back_migrations,
         })
     }
+
+    fn generate_migration_rollback(
+        &self,
+        profile: &ProjectDatabaseProfile,
+        migration_path: &str,
+    ) -> AppResult<DatabaseMigrationRollbackGenerationResult> {
+        let migration_path = validate_migration_path(profile, migration_path)?;
+        let rollback_path = rollback_path_for_generated_migration(&migration_path)?;
+        let migration_sql = fs::read_to_string(&migration_path).map_err(|error| {
+            AppError::Infrastructure(format!("failed to read migration SQL: {error}"))
+        })?;
+        let generated = generate_rollback_sql(&migration_sql);
+
+        fs::write(&rollback_path, generated.contents()).map_err(|error| {
+            AppError::Infrastructure(format!("failed to write generated rollback SQL: {error}"))
+        })?;
+
+        Ok(DatabaseMigrationRollbackGenerationResult {
+            project_id: profile.project_id.clone(),
+            database_type: profile.database_type,
+            migration_path: migration_path.to_string_lossy().into_owned(),
+            rollback_path: rollback_path.to_string_lossy().into_owned(),
+            generated_statements: generated.statements,
+            warnings: generated.warnings,
+            status_message: "Rollback SQL was generated from reversible migration patterns."
+                .to_string(),
+        })
+    }
 }
 
 fn ensure_profile_ready(profile: &ProjectDatabaseProfile) -> AppResult<()> {
@@ -580,4 +608,169 @@ fn prepare_replay_sql(
     run_mysql_binlog_export(replay_log_path, &output_path)?;
 
     Ok(output_path)
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct GeneratedRollbackSql {
+    statements: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl GeneratedRollbackSql {
+    fn contents(&self) -> String {
+        let mut contents =
+            "-- AxiomPHP generated migration rollback\n-- Review before running.\n\n".to_string();
+
+        for warning in &self.warnings {
+            contents.push_str("-- WARNING: ");
+            contents.push_str(warning);
+            contents.push('\n');
+        }
+
+        if !self.warnings.is_empty() {
+            contents.push('\n');
+        }
+
+        for statement in &self.statements {
+            contents.push_str(statement);
+            contents.push_str("\n");
+        }
+
+        contents
+    }
+}
+
+fn validate_migration_path(
+    profile: &ProjectDatabaseProfile,
+    migration_path: &str,
+) -> AppResult<PathBuf> {
+    let migration_dir = validate_existing_directory(&profile.migration_dir, "migration directory")?;
+    let migration_path = std::path::Path::new(migration_path.trim())
+        .canonicalize()
+        .map_err(|error| {
+            AppError::Validation(format!("migration path is not readable: {error}"))
+        })?;
+
+    if !migration_path.starts_with(&migration_dir) {
+        return Err(AppError::Validation(
+            "migration path must be inside the profile migration directory".to_string(),
+        ));
+    }
+
+    let file_name = migration_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default();
+
+    if !file_name.ends_with(".sql") || file_name.ends_with(".down.sql") {
+        return Err(AppError::Validation(
+            "migration path must point to a forward .sql file".to_string(),
+        ));
+    }
+
+    Ok(migration_path)
+}
+
+fn rollback_path_for_generated_migration(migration_path: &std::path::Path) -> AppResult<PathBuf> {
+    let file_name = migration_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .ok_or_else(|| AppError::Validation("migration path has no file name".to_string()))?;
+    let stem = file_name.strip_suffix(".sql").ok_or_else(|| {
+        AppError::Validation("migration path must point to a .sql file".to_string())
+    })?;
+
+    Ok(migration_path.with_file_name(format!("{stem}.down.sql")))
+}
+
+fn generate_rollback_sql(sql: &str) -> GeneratedRollbackSql {
+    let mut statements = Vec::new();
+    let mut warnings = Vec::new();
+
+    for statement in sql.split(';') {
+        let statement = statement.trim();
+        if statement.is_empty() || statement.starts_with("--") {
+            continue;
+        }
+
+        if let Some(rollback) = rollback_create_table(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_add_column(statement) {
+            statements.push(rollback);
+        } else {
+            warnings.push(format!(
+                "Unsupported migration statement was not auto-reversed: {}",
+                first_words(statement, 12)
+            ));
+        }
+    }
+
+    statements.reverse();
+
+    GeneratedRollbackSql {
+        statements,
+        warnings,
+    }
+}
+
+fn rollback_create_table(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3
+        || !tokens[0].eq_ignore_ascii_case("create")
+        || !tokens[1].eq_ignore_ascii_case("table")
+    {
+        return None;
+    }
+
+    let table_name = if tokens
+        .get(2)
+        .is_some_and(|token| token.eq_ignore_ascii_case("if"))
+    {
+        tokens.get(5)?
+    } else {
+        tokens.get(2)?
+    };
+
+    Some(format!(
+        "DROP TABLE IF EXISTS {};",
+        trim_identifier_suffix(table_name)
+    ))
+}
+
+fn rollback_add_column(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 6
+        || !tokens[0].eq_ignore_ascii_case("alter")
+        || !tokens[1].eq_ignore_ascii_case("table")
+        || !tokens[3].eq_ignore_ascii_case("add")
+    {
+        return None;
+    }
+
+    let column_index = if tokens
+        .get(4)
+        .is_some_and(|token| token.eq_ignore_ascii_case("column"))
+    {
+        5
+    } else {
+        4
+    };
+
+    Some(format!(
+        "ALTER TABLE {} DROP COLUMN {};",
+        trim_identifier_suffix(tokens[2]),
+        trim_identifier_suffix(tokens[column_index])
+    ))
+}
+
+fn trim_identifier_suffix(value: &str) -> &str {
+    value.trim_end_matches(|character| matches!(character, '(' | ',' | ';'))
+}
+
+fn first_words(value: &str, limit: usize) -> String {
+    value
+        .split_whitespace()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join(" ")
 }

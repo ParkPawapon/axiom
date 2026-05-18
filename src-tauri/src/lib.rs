@@ -58,6 +58,7 @@ pub fn run() {
             commands::database_commands::restore_project_database_to_point_in_time,
             commands::database_commands::restore_project_database_with_replay,
             commands::database_commands::create_project_database_migration,
+            commands::database_commands::generate_project_database_migration_rollback,
             commands::database_commands::rollback_project_database_migrations,
             commands::database_commands::run_project_database_migrations,
             commands::log_commands::read_project_logs,

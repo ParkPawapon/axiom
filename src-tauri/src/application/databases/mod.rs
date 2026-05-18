@@ -3,6 +3,7 @@ pub mod configure_mysql_use_case;
 pub mod configure_postgres_use_case;
 pub mod create_project_database_migration_use_case;
 mod database_type_parser;
+pub mod generate_project_database_migration_rollback_use_case;
 pub mod get_database_backup_scheduler_status_use_case;
 pub mod get_database_status_use_case;
 pub mod install_database_backup_scheduler_use_case;

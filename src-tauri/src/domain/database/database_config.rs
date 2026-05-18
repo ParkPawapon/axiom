@@ -307,6 +307,18 @@ pub struct DatabaseMigrationRollbackResult {
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DatabaseMigrationRollbackGenerationResult {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub migration_path: String,
+    pub rollback_path: String,
+    pub generated_statements: Vec<String>,
+    pub warnings: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DatabasePointInTimeRestoreResult {
     pub project_id: ProjectId,
     pub database_type: DatabaseType,
