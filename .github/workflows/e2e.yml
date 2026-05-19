@@ -1,0 +1,79 @@
+name: E2E
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_real_docker:
+        description: "Run the opt-in real Docker container integration test"
+        required: false
+        default: "false"
+      docker_php_image:
+        description: "Digest-pinned PHP image for the real Docker integration test"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  capability-e2e:
+    name: ${{ matrix.os }} / ${{ matrix.suite }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            suite: backup-cloud-kms-trust
+            command: bun run test:e2e:backup
+          - os: windows-latest
+            suite: backup-cross-machine-trust
+            command: bun run test:e2e:backup
+          - os: macos-14
+            suite: docker-orchestration-boundary
+            command: bun run test:e2e:docker
+          - os: windows-latest
+            suite: docker-compose-generation
+            command: cargo test --manifest-path src-tauri/Cargo.toml --test docker_compose_generation_e2e
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.23
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run capability E2E suite
+        run: ${{ matrix.command }}
+
+  real-docker-runtime:
+    name: Real Docker runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_real_docker == 'true' && inputs.docker_php_image != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run opt-in Docker integration test
+        env:
+          AXIOM_RUN_DOCKER_INTEGRATION_TEST: "1"
+          AXIOM_DOCKER_INTEGRATION_PHP_IMAGE: ${{ inputs.docker_php_image }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test docker_orchestration_integration -- --nocapture

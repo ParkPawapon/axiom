@@ -245,7 +245,7 @@ fn copy_one_local(source_path: &Path, destination_dir: &Path) -> AppResult<PathB
         .ok_or_else(|| AppError::Validation("backup artifact has no file name".to_string()))?;
     let destination_path = destination_dir.join(file_name);
 
-    fs::copy(&source_path, &destination_path).map_err(|error| {
+    fs::copy(source_path, &destination_path).map_err(|error| {
         AppError::Infrastructure(format!("failed to copy backup artifact: {error}"))
     })?;
 

@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: "Use signed for production releases; dry-run generates unsigned verification builds."
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - signed
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: ${{ matrix.platform }} package
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos
+          - os: windows-latest
+            platform: windows
+
+    env:
+      CI: "true"
+      AXIOM_RELEASE_MODE: ${{ github.ref_type == 'tag' && 'signed' || inputs.release_mode }}
+      AXIOM_RELEASE_PLATFORM: ${{ matrix.platform }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+      WINDOWS_DIGEST_ALGORITHM: sha256
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+      WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.23
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Check backend before packaging
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Materialize Apple API key
+        if: ${{ matrix.platform == 'macos' && env.APPLE_API_KEY_BASE64 != '' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          key = os.environ["APPLE_API_KEY_BASE64"]
+          output = Path(os.environ["RUNNER_TEMP"]) / "AuthKey.p8"
+          output.write_bytes(base64.b64decode(key))
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"APPLE_API_KEY_PATH={output}\n")
+          PY
+
+      - name: Import Windows signing certificate
+        if: ${{ matrix.platform == 'windows' && env.WINDOWS_CERTIFICATE != '' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path certificate | Out-Null
+          [IO.File]::WriteAllBytes("certificate\certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          Import-PfxCertificate `
+            -FilePath "certificate\certificate.pfx" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+
+      - name: Verify signing and notarization environment
+        run: bun run release:verify-env
+
+      - name: Generate release Tauri config
+        run: bun run release:config
+
+      - name: Build desktop package
+        shell: bash
+        run: |
+          if [ "$AXIOM_RELEASE_MODE" = "signed" ]; then
+            bun tauri build --ci --config src-tauri/tauri.release.generated.conf.json
+          else
+            bun tauri build --ci --no-sign --config src-tauri/tauri.release.generated.conf.json
+          fi
+
+      - name: Verify release artifacts
+        run: bun run release:verify-artifacts
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiomphp-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle
+            .release/*.json
+
+      - name: Attach artifacts to GitHub release
+        if: ${{ github.ref_type == 'tag' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Automated AxiomPHP release."
+          find src-tauri/target/release/bundle .release -type f \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.msix' -o -name '*.gz' -o -name '*.json' \) \
+            -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
