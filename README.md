@@ -67,6 +67,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 - Environment profile management
 - Logs viewer and service health status
 - Permission and audit log workflows
+- Signed release promotion dashboards and installer distribution policy
 
 ## Development Commands
 
@@ -106,10 +107,28 @@ Quality checks:
 bun lint
 bun typecheck
 bun format
+bun run test:e2e:backup
+bun run test:e2e:docker
+bun run release:verify-env
+bun run release:config
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
 ```
+
+## Testing And Release
+
+The repository includes macOS and Windows CI matrices for frontend, Rust, and
+release-config validation. Capability E2E suites cover managed backup/restore,
+cloud backup provider CLI boundaries, KMS envelope restore, cross-machine
+backup trust enrollment, Docker Compose generation, and Docker orchestration
+through allowlisted fake CLIs. Real Docker runtime execution remains opt-in
+because it starts containers and requires digest-pinned images.
+
+Release packaging is handled by `.github/workflows/release.yml`. Signed tag
+releases fail closed when required macOS signing/notarization or Windows signing
+inputs are missing. Dry-run manual releases can build unsigned packages while
+still generating release manifests with SHA-256 hashes.
 
 ## Not Implemented Yet
 
