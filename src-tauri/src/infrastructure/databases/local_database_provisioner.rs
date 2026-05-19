@@ -681,7 +681,7 @@ impl GeneratedRollbackSql {
 
         for statement in &self.statements {
             contents.push_str(statement);
-            contents.push_str("\n");
+            contents.push('\n');
         }
 
         contents
@@ -946,7 +946,7 @@ fn rollback_rename_column(statement: &str) -> Option<String> {
 }
 
 fn trim_identifier_suffix(value: &str) -> &str {
-    value.trim_end_matches(|character| matches!(character, '(' | ',' | ';'))
+    value.trim_end_matches(['(', ',', ';'])
 }
 
 fn first_words(value: &str, limit: usize) -> String {

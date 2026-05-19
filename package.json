@@ -13,7 +13,12 @@
     "tauri:build": "bun node_modules/@tauri-apps/cli/tauri.js build",
     "lint": "bun node_modules/eslint/bin/eslint.js .",
     "typecheck": "bun node_modules/typescript/bin/tsc -b --pretty",
-    "format": "bun node_modules/prettier/bin/prettier.cjs . --write"
+    "format": "bun node_modules/prettier/bin/prettier.cjs . --write",
+    "test:e2e:backup": "cargo test --manifest-path src-tauri/Cargo.toml --test backup_restore_e2e",
+    "test:e2e:docker": "cargo test --manifest-path src-tauri/Cargo.toml --test docker_compose_generation_e2e --test docker_orchestration_e2e",
+    "release:verify-env": "node scripts/release/verify-signing-env.mjs",
+    "release:config": "node scripts/release/create-tauri-release-config.mjs",
+    "release:verify-artifacts": "node scripts/release/verify-release-artifacts.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -29,6 +34,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tailwindcss/postcss": "^4.3.0",
     "@tauri-apps/cli": "^2.8.4",
     "@types/node": "^25.8.0",
     "@types/react": "^19.1.10",
