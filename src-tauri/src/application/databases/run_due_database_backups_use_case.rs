@@ -83,7 +83,12 @@ fn run_policy_backup(
     if let Some(destination) =
         backup_destination_repository.get_destination(&policy.project_id, policy.database_type)?
     {
-        backup.remote_copy_paths = copy_backup_to_remote_destination(&backup, &destination)?;
+        backup.remote_copy_receipts = copy_backup_to_remote_destination(&backup, &destination)?;
+        backup.remote_copy_paths = backup
+            .remote_copy_receipts
+            .iter()
+            .map(|receipt| receipt.remote_uri.clone())
+            .collect();
     }
 
     policy.last_run_at = Some(now);

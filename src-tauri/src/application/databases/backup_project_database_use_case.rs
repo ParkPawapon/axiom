@@ -36,7 +36,12 @@ pub fn backup_project_database(
     if let Some(destination) =
         backup_destination_repository.get_destination(&project_id, database_type)?
     {
-        result.remote_copy_paths = copy_backup_to_remote_destination(&result, &destination)?;
+        result.remote_copy_receipts = copy_backup_to_remote_destination(&result, &destination)?;
+        result.remote_copy_paths = result
+            .remote_copy_receipts
+            .iter()
+            .map(|receipt| receipt.remote_uri.clone())
+            .collect();
     }
 
     Ok(result)
