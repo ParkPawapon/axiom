@@ -3,10 +3,12 @@ use tauri::State;
 use crate::application::docker::project_docker_use_case;
 use crate::bootstrap::app_state::AppState;
 use crate::domain::docker::docker_project::{
-    DockerComposeProfile, DockerDiagnosticsReport, DockerProjectActionResult,
-    DockerProjectComposePlan, DockerProjectLogReadResult, DockerProjectRuntimeStatus,
-    DockerProjectVolumeLifecycleResult,
+    DockerComposeProfile, DockerDiagnosticsReport, DockerImagePinResolutionReport,
+    DockerProjectActionResult, DockerProjectComposePlan, DockerProjectComposeRequest,
+    DockerProjectImageOverride, DockerProjectLogReadResult, DockerProjectResourceLimits,
+    DockerProjectRuntimeStatus, DockerProjectVolumeLifecycleResult,
 };
+use crate::domain::project::project_id::ProjectId;
 use crate::shared::error::command_error_mapper::{map_command_error, CommandErrorPayload};
 
 #[tauri::command]
@@ -26,15 +28,38 @@ pub fn generate_project_docker_compose(
     state: State<'_, AppState>,
     project_id: String,
     profiles: Vec<DockerComposeProfile>,
+    image_overrides: Vec<DockerProjectImageOverride>,
+    resource_limits: DockerProjectResourceLimits,
 ) -> Result<DockerProjectComposePlan, CommandErrorPayload> {
+    let request = docker_request(project_id, profiles, image_overrides, resource_limits);
+
     project_docker_use_case::generate_project_docker_compose(
         state.project_repository(),
         state.docker_project_orchestrator(),
-        &project_id,
-        &profiles,
+        &request,
     )
     .map_err(|error| {
         tracing::warn!(?error, "project docker compose generation command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn resolve_project_docker_image_pins(
+    state: State<'_, AppState>,
+    project_id: String,
+    profiles: Vec<DockerComposeProfile>,
+    image_overrides: Vec<DockerProjectImageOverride>,
+    resource_limits: DockerProjectResourceLimits,
+) -> Result<DockerImagePinResolutionReport, CommandErrorPayload> {
+    let request = docker_request(project_id, profiles, image_overrides, resource_limits);
+
+    project_docker_use_case::resolve_project_docker_image_pins(
+        state.docker_project_orchestrator(),
+        &request,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "project docker image pin resolution command failed");
         map_command_error(&error)
     })
 }
@@ -60,12 +85,15 @@ pub fn start_project_docker_services(
     state: State<'_, AppState>,
     project_id: String,
     profiles: Vec<DockerComposeProfile>,
+    image_overrides: Vec<DockerProjectImageOverride>,
+    resource_limits: DockerProjectResourceLimits,
 ) -> Result<DockerProjectActionResult, CommandErrorPayload> {
+    let request = docker_request(project_id, profiles, image_overrides, resource_limits);
+
     project_docker_use_case::start_project_docker_services(
         state.project_repository(),
         state.docker_project_orchestrator(),
-        &project_id,
-        &profiles,
+        &request,
     )
     .map_err(|error| {
         tracing::warn!(?error, "project docker start command failed");
@@ -94,12 +122,15 @@ pub fn restart_project_docker_services(
     state: State<'_, AppState>,
     project_id: String,
     profiles: Vec<DockerComposeProfile>,
+    image_overrides: Vec<DockerProjectImageOverride>,
+    resource_limits: DockerProjectResourceLimits,
 ) -> Result<DockerProjectActionResult, CommandErrorPayload> {
+    let request = docker_request(project_id, profiles, image_overrides, resource_limits);
+
     project_docker_use_case::restart_project_docker_services(
         state.project_repository(),
         state.docker_project_orchestrator(),
-        &project_id,
-        &profiles,
+        &request,
     )
     .map_err(|error| {
         tracing::warn!(?error, "project docker restart command failed");
@@ -112,17 +143,34 @@ pub fn ensure_project_docker_volumes(
     state: State<'_, AppState>,
     project_id: String,
     profiles: Vec<DockerComposeProfile>,
+    image_overrides: Vec<DockerProjectImageOverride>,
+    resource_limits: DockerProjectResourceLimits,
 ) -> Result<DockerProjectVolumeLifecycleResult, CommandErrorPayload> {
+    let request = docker_request(project_id, profiles, image_overrides, resource_limits);
+
     project_docker_use_case::ensure_project_docker_volumes(
         state.project_repository(),
         state.docker_project_orchestrator(),
-        &project_id,
-        &profiles,
+        &request,
     )
     .map_err(|error| {
         tracing::warn!(?error, "project docker volume ensure command failed");
         map_command_error(&error)
     })
+}
+
+fn docker_request(
+    project_id: String,
+    profiles: Vec<DockerComposeProfile>,
+    image_overrides: Vec<DockerProjectImageOverride>,
+    resource_limits: DockerProjectResourceLimits,
+) -> DockerProjectComposeRequest {
+    DockerProjectComposeRequest {
+        project_id: ProjectId(project_id),
+        profiles,
+        image_overrides,
+        resource_limits,
+    }
 }
 
 #[tauri::command]

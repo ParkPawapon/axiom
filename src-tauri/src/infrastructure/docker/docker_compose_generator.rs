@@ -2,18 +2,21 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::domain::docker::docker_project::{
-    DockerComposeProfile, DockerImageTrustEvaluation, DockerProjectServicePlan,
-    DockerProjectVolumePlan,
+    DockerComposeProfile, DockerImageTrustEvaluation, DockerProjectResourceLimits,
+    DockerProjectServicePlan, DockerProjectVolumePlan,
 };
 use crate::shared::error::app_error::AppError;
 use crate::shared::result::app_result::AppResult;
 
 const PHP_CONTAINER_PORT: u16 = 8000;
 const MYSQL_CONTAINER_PORT: u16 = 3306;
+const REDIS_CONTAINER_PORT: u16 = 6379;
+const MAILPIT_SMTP_CONTAINER_PORT: u16 = 1025;
+const MAILPIT_WEB_CONTAINER_PORT: u16 = 8025;
 const POSTGRES_CONTAINER_PORT: u16 = 5432;
 const REVERSE_PROXY_CONTAINER_PORT: u16 = 80;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DockerComposeGenerationInput {
     pub project_id: String,
     pub document_root: String,
@@ -23,16 +26,20 @@ pub struct DockerComposeGenerationInput {
     pub profiles: Vec<DockerComposeProfile>,
     pub images: BTreeMap<DockerComposeProfile, String>,
     pub ports: DockerProjectPorts,
+    pub resource_limits: DockerProjectResourceLimits,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DockerProjectPorts {
     pub mysql_host_port: u16,
+    pub redis_host_port: u16,
+    pub mailpit_smtp_host_port: u16,
+    pub mailpit_web_host_port: u16,
     pub postgres_host_port: u16,
     pub reverse_proxy_host_port: u16,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DockerComposeGenerationOutput {
     pub compose_yaml: String,
     pub reverse_proxy_config: Option<String>,
@@ -76,7 +83,11 @@ impl DockerComposeGenerator {
                 container_port: Some(PHP_CONTAINER_PORT),
                 status_message: "PHP development server service is included.".to_string(),
             });
-            yaml.push_str(&php_service_yaml(&image, &input.document_root));
+            yaml.push_str(&php_service_yaml(
+                &image,
+                &input.document_root,
+                input.resource_limits,
+            ));
         }
 
         if profiles.contains(&DockerComposeProfile::Mysql) {
@@ -100,6 +111,7 @@ impl DockerComposeGenerator {
                 &image,
                 input.ports.mysql_host_port,
                 &volume_name,
+                input.resource_limits,
             ));
         }
 
@@ -125,6 +137,51 @@ impl DockerComposeGenerator {
                 &image,
                 input.ports.postgres_host_port,
                 &volume_name,
+                input.resource_limits,
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::Redis) {
+            let image = required_image(&input.images, DockerComposeProfile::Redis).to_string();
+            let volume_name = redis_volume_name(&input.project_id);
+            services.push(DockerProjectServicePlan {
+                profile: DockerComposeProfile::Redis,
+                service_name: "redis".to_string(),
+                image: image.clone(),
+                host_port: Some(input.ports.redis_host_port),
+                container_port: Some(REDIS_CONTAINER_PORT),
+                status_message: "Project-specific Redis service profile is included.".to_string(),
+            });
+            volumes.push(DockerProjectVolumePlan {
+                name: volume_name.clone(),
+                service_name: "redis".to_string(),
+                mount_path: "/data".to_string(),
+                created: false,
+            });
+            yaml.push_str(&redis_service_yaml(
+                &image,
+                input.ports.redis_host_port,
+                &volume_name,
+                input.resource_limits,
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::Mailpit) {
+            let image = required_image(&input.images, DockerComposeProfile::Mailpit).to_string();
+            services.push(DockerProjectServicePlan {
+                profile: DockerComposeProfile::Mailpit,
+                service_name: "mailpit".to_string(),
+                image: image.clone(),
+                host_port: Some(input.ports.mailpit_web_host_port),
+                container_port: Some(MAILPIT_WEB_CONTAINER_PORT),
+                status_message: "Project-specific Mailpit SMTP and web UI profile is included."
+                    .to_string(),
+            });
+            yaml.push_str(&mailpit_service_yaml(
+                &image,
+                input.ports.mailpit_smtp_host_port,
+                input.ports.mailpit_web_host_port,
+                input.resource_limits,
             ));
         }
 
@@ -147,6 +204,7 @@ impl DockerComposeGenerator {
                 &image,
                 input.ports.reverse_proxy_host_port,
                 &input.reverse_proxy_config_file_name,
+                input.resource_limits,
             ));
         }
 
@@ -206,11 +264,17 @@ pub fn postgres_volume_name(project_id: &str) -> String {
     format!("axiom_{}_postgres_data", volume_safe_project_id(project_id))
 }
 
+pub fn redis_volume_name(project_id: &str) -> String {
+    format!("axiom_{}_redis_data", volume_safe_project_id(project_id))
+}
+
 pub fn image_trust_evaluation(
     profile: DockerComposeProfile,
     image: &str,
 ) -> DockerImageTrustEvaluation {
     let pinned_by_digest = image_is_digest_pinned(image);
+    let registry_allowed = true;
+    let metadata_verified = false;
     let allowed = pinned_by_digest;
     let status_message = if allowed {
         "Image reference is pinned by sha256 digest.".to_string()
@@ -222,7 +286,10 @@ pub fn image_trust_evaluation(
         profile,
         image: image.to_string(),
         pinned_by_digest,
+        registry_allowed,
+        metadata_verified,
         allowed,
+        metadata: None,
         status_message,
     }
 }
@@ -235,7 +302,11 @@ pub fn image_is_digest_pinned(image: &str) -> bool {
     digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn php_service_yaml(image: &str, document_root: &str) -> String {
+fn php_service_yaml(
+    image: &str,
+    document_root: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
     format!(
         r#"  php:
     image: {image}
@@ -250,13 +321,20 @@ fn php_service_yaml(image: &str, document_root: &str) -> String {
         target: /workspace
     labels:
       dev.axiomphp.service: "php"
+{resource_limits}
 "#,
         image = quote_yaml(image),
         document_root = quote_yaml(document_root),
+        resource_limits = resource_limit_yaml(resource_limits),
     )
 }
 
-fn mysql_service_yaml(image: &str, host_port: u16, volume_name: &str) -> String {
+fn mysql_service_yaml(
+    image: &str,
+    host_port: u16,
+    volume_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
     format!(
         r#"  mysql:
     image: {image}
@@ -272,12 +350,19 @@ fn mysql_service_yaml(image: &str, host_port: u16, volume_name: &str) -> String 
       - {volume_name}:/var/lib/mysql
     labels:
       dev.axiomphp.service: "mysql"
+{resource_limits}
 "#,
         image = quote_yaml(image),
+        resource_limits = resource_limit_yaml(resource_limits),
     )
 }
 
-fn postgres_service_yaml(image: &str, host_port: u16, volume_name: &str) -> String {
+fn postgres_service_yaml(
+    image: &str,
+    host_port: u16,
+    volume_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
     format!(
         r#"  postgres:
     image: {image}
@@ -292,12 +377,66 @@ fn postgres_service_yaml(image: &str, host_port: u16, volume_name: &str) -> Stri
       - {volume_name}:/var/lib/postgresql/data
     labels:
       dev.axiomphp.service: "postgresql"
+{resource_limits}
 "#,
         image = quote_yaml(image),
+        resource_limits = resource_limit_yaml(resource_limits),
     )
 }
 
-fn reverse_proxy_service_yaml(image: &str, host_port: u16, config_file_name: &str) -> String {
+fn redis_service_yaml(
+    image: &str,
+    host_port: u16,
+    volume_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
+    format!(
+        r#"  redis:
+    image: {image}
+    profiles: ["redis"]
+    ports:
+      - "127.0.0.1:{host_port}:6379"
+    volumes:
+      - {volume_name}:/data
+    labels:
+      dev.axiomphp.service: "redis"
+{resource_limits}
+"#,
+        image = quote_yaml(image),
+        resource_limits = resource_limit_yaml(resource_limits),
+    )
+}
+
+fn mailpit_service_yaml(
+    image: &str,
+    smtp_host_port: u16,
+    web_host_port: u16,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
+    format!(
+        r#"  mailpit:
+    image: {image}
+    profiles: ["mailpit"]
+    ports:
+      - "127.0.0.1:{smtp_host_port}:{smtp_container_port}"
+      - "127.0.0.1:{web_host_port}:{web_container_port}"
+    labels:
+      dev.axiomphp.service: "mailpit"
+{resource_limits}
+"#,
+        image = quote_yaml(image),
+        resource_limits = resource_limit_yaml(resource_limits),
+        smtp_container_port = MAILPIT_SMTP_CONTAINER_PORT,
+        web_container_port = MAILPIT_WEB_CONTAINER_PORT,
+    )
+}
+
+fn reverse_proxy_service_yaml(
+    image: &str,
+    host_port: u16,
+    config_file_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
     format!(
         r#"  reverse-proxy:
     image: {image}
@@ -310,8 +449,10 @@ fn reverse_proxy_service_yaml(image: &str, host_port: u16, config_file_name: &st
       - ./{config_file_name}:/etc/nginx/conf.d/default.conf:ro
     labels:
       dev.axiomphp.service: "reverse-proxy"
+{resource_limits}
 "#,
         image = quote_yaml(image),
+        resource_limits = resource_limit_yaml(resource_limits),
     )
 }
 
@@ -342,11 +483,13 @@ fn required_image(
         .unwrap_or_else(|| default_image(profile))
 }
 
-fn default_image(profile: DockerComposeProfile) -> &'static str {
+pub fn default_image(profile: DockerComposeProfile) -> &'static str {
     match profile {
+        DockerComposeProfile::Mailpit => "axllent/mailpit:v1.22",
         DockerComposeProfile::Mysql => "mysql:8.4",
         DockerComposeProfile::Php => "php:8.4-cli",
         DockerComposeProfile::Postgresql => "postgres:17",
+        DockerComposeProfile::Redis => "redis:7-alpine",
         DockerComposeProfile::ReverseProxy => "nginx:1.27-alpine",
     }
 }
@@ -366,6 +509,24 @@ fn validate_document_root(document_root: &str) -> AppResult<()> {
 fn quote_yaml(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
+}
+
+fn resource_limit_yaml(resource_limits: DockerProjectResourceLimits) -> String {
+    let mut yaml = String::new();
+
+    if let Some(cpus) = resource_limits.cpus {
+        yaml.push_str("    cpus: ");
+        yaml.push_str(&quote_yaml(&format!("{cpus:.2}")));
+        yaml.push('\n');
+    }
+
+    if let Some(memory_mb) = resource_limits.memory_mb {
+        yaml.push_str("    mem_limit: ");
+        yaml.push_str(&quote_yaml(&format!("{memory_mb}m")));
+        yaml.push('\n');
+    }
+
+    yaml
 }
 
 fn volume_safe_project_id(project_id: &str) -> String {

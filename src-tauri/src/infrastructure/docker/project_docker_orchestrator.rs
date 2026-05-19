@@ -11,16 +11,19 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::domain::docker::docker_project::{
-    DockerComposeProfile, DockerDiagnosticCheck, DockerDiagnosticsReport,
-    DockerProjectActionResult, DockerProjectComposePlan, DockerProjectContainerStatus,
-    DockerProjectLogReadResult, DockerProjectRuntimeStatus, DockerProjectVolumeLifecycleResult,
-    DockerProjectVolumePlan,
+    DockerComposeProfile, DockerDiagnosticCheck, DockerDiagnosticsReport, DockerImagePinResolution,
+    DockerImagePinResolutionReport, DockerImageTrustEvaluation, DockerProjectActionResult,
+    DockerProjectComposePlan, DockerProjectComposeRequest, DockerProjectContainerStatus,
+    DockerProjectImageOverride, DockerProjectLogReadResult, DockerProjectResourceLimits,
+    DockerProjectRuntimeStatus, DockerProjectVolumeLifecycleResult, DockerProjectVolumePlan,
+    DockerRegistryTrustMetadata,
 };
 use crate::domain::project::project::Project;
 use crate::domain::security::command_policy::{CommandPolicy, ProcessCommand, ProcessOutput};
 use crate::infrastructure::docker::docker_compose_generator::{
-    mysql_volume_name, normalize_profiles, postgres_volume_name, DockerComposeGenerationInput,
-    DockerComposeGenerator, DockerProjectPorts,
+    default_image, image_is_digest_pinned, mysql_volume_name, normalize_profiles,
+    postgres_volume_name, redis_volume_name, DockerComposeGenerationInput, DockerComposeGenerator,
+    DockerProjectPorts,
 };
 use crate::infrastructure::process::command_runner::CommandRunner;
 use crate::infrastructure::services::adapters::executable_resolver::ExecutableResolver;
@@ -34,8 +37,10 @@ use crate::shared::validation::validate_project_id::validate_project_id;
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(8);
 const COMPOSE_TIMEOUT: Duration = Duration::from_secs(120);
 const DOCKER_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
+const IMAGE_INSPECT_TIMEOUT: Duration = Duration::from_secs(90);
 const DOCKER_SECRET_NAMESPACE: &str = "docker";
 const LABEL_PROJECT_ID: &str = "dev.axiomphp.project-id";
+const DEFAULT_ALLOWED_REGISTRIES: &[&str] = &["docker.io", "registry-1.docker.io"];
 
 #[derive(Clone)]
 pub struct ProjectDockerOrchestrator {
@@ -94,6 +99,14 @@ impl ProjectDockerOrchestrator {
         timeout: Duration,
     ) -> AppResult<ProcessOutput> {
         let docker_path = resolve_docker()?;
+        let mut command_args = Vec::new();
+
+        if let Some(context) = configured_docker_context()? {
+            command_args.push("--context".to_string());
+            command_args.push(context);
+        }
+
+        command_args.extend(args.into_iter().map(Into::into));
         let runner = CommandRunner::new(
             CommandPolicy::deny_all()
                 .allow_program_paths([docker_path.clone()])
@@ -103,7 +116,7 @@ impl ProjectDockerOrchestrator {
 
         runner.execute(
             ProcessCommand::new(docker_path.to_string_lossy().into_owned())
-                .args(args)
+                .args(command_args)
                 .timeout(timeout),
         )
     }
@@ -120,11 +133,12 @@ impl ProjectDockerOrchestrator {
     fn write_compose_files(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectComposePlan> {
         let paths = self.paths_for_project(project)?;
-        let normalized_profiles = normalize_profiles(profiles);
-        let images = configured_images();
+        validate_resource_limits(request.resource_limits)?;
+        let normalized_profiles = normalize_profiles(&request.profiles);
+        let images = configured_images(&request.image_overrides)?;
         let compose_project_name = compose_project_name(&project.id.0);
         let ports = deterministic_ports(&project.id.0);
 
@@ -145,12 +159,14 @@ impl ProjectDockerOrchestrator {
                 .unwrap_or("reverse-proxy.conf")
                 .to_string(),
             profiles: normalized_profiles.clone(),
-            images,
+            images: images.clone(),
             ports: ports.clone(),
+            resource_limits: request.resource_limits,
         })?;
 
-        let mut diagnostics = image_diagnostics(&generation.image_trust);
-        let can_write_compose = generation.image_trust.iter().all(|trust| trust.allowed);
+        let image_trust = self.evaluate_image_trust(&normalized_profiles, &images);
+        let mut diagnostics = image_diagnostics(&image_trust);
+        let can_write_compose = image_trust.iter().all(|trust| trust.allowed);
         let mut compose_file_written = false;
 
         if can_write_compose {
@@ -215,7 +231,8 @@ impl ProjectDockerOrchestrator {
             profiles: normalized_profiles,
             services: generation.services,
             volumes: generation.volumes,
-            image_trust: generation.image_trust,
+            image_trust,
+            resource_limits: request.resource_limits,
             diagnostics,
             generated_at: Utc::now(),
             status_message,
@@ -410,12 +427,61 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
         })
     }
 
+    fn resolve_image_pins(
+        &self,
+        request: &DockerProjectComposeRequest,
+    ) -> AppResult<DockerImagePinResolutionReport> {
+        validate_project_id(&request.project_id.0)?;
+        let profiles = normalize_profiles(&request.profiles);
+        let images = configured_images(&request.image_overrides)?;
+        let mut diagnostics = Vec::new();
+        let mut resolutions = Vec::new();
+
+        for profile in profiles {
+            let source_image = required_image_for_profile(&images, profile).to_string();
+            match self.inspect_registry_metadata(&source_image) {
+                Ok(metadata) => {
+                    let pinned_image = pin_image_reference(&source_image, &metadata.digest);
+                    diagnostics.push(format!(
+                        "{} image resolved to {}.",
+                        profile.as_key(),
+                        metadata.digest
+                    ));
+                    resolutions.push(DockerImagePinResolution {
+                        profile,
+                        source_image,
+                        pinned_image,
+                        metadata,
+                        status_message: "Image digest resolved from registry metadata.".to_string(),
+                    });
+                }
+                Err(error) => diagnostics.push(format!(
+                    "{} image `{}` could not be resolved: {error}",
+                    profile.as_key(),
+                    source_image
+                )),
+            }
+        }
+
+        let status_message = if resolutions.is_empty() {
+            "No Docker image digests were resolved.".to_string()
+        } else {
+            format!("Resolved {} Docker image digest(s).", resolutions.len())
+        };
+
+        Ok(DockerImagePinResolutionReport {
+            resolutions,
+            diagnostics,
+            status_message,
+        })
+    }
+
     fn generate_compose_plan(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectComposePlan> {
-        self.write_compose_files(project, profiles)
+        self.write_compose_files(project, request)
     }
 
     fn get_runtime_status(&self, project: &Project) -> AppResult<DockerProjectRuntimeStatus> {
@@ -467,9 +533,9 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
     fn start_project(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectActionResult> {
-        let plan = self.write_compose_files(project, profiles)?;
+        let plan = self.write_compose_files(project, request)?;
         ensure_plan_is_startable(&plan)?;
         let mut args = self.compose_args(project, &plan.profiles)?;
         args.extend([
@@ -491,7 +557,8 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
     }
 
     fn stop_project(&self, project: &Project) -> AppResult<DockerProjectActionResult> {
-        let plan = self.write_compose_files(project, &[])?;
+        let request = default_project_request(project);
+        let plan = self.write_compose_files(project, &request)?;
         let mut args = self.compose_args(project, &[])?;
         args.extend(["down".to_string(), "--remove-orphans".to_string()]);
         let output = self.run_docker(args, COMPOSE_TIMEOUT)?;
@@ -510,10 +577,10 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
     fn restart_project(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectActionResult> {
         let _ = self.stop_project(project);
-        let mut result = self.start_project(project, profiles)?;
+        let mut result = self.start_project(project, request)?;
         result.action = "restart".to_string();
         result.status_message = "Project Docker services restarted.".to_string();
         Ok(result)
@@ -522,9 +589,9 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
     fn ensure_project_volumes(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectVolumeLifecycleResult> {
-        let volumes = planned_volumes(project, profiles);
+        let volumes = planned_volumes(project, &request.profiles);
 
         for volume in &volumes {
             let output = self.run_docker(
@@ -651,16 +718,110 @@ impl ProjectDockerOrchestrator {
             })
             .collect())
     }
+
+    fn evaluate_image_trust(
+        &self,
+        profiles: &[DockerComposeProfile],
+        images: &BTreeMap<DockerComposeProfile, String>,
+    ) -> Vec<DockerImageTrustEvaluation> {
+        profiles
+            .iter()
+            .map(|profile| {
+                let image = required_image_for_profile(images, *profile);
+                let pinned_by_digest = image_is_digest_pinned(image);
+
+                match self.inspect_registry_metadata(image) {
+                    Ok(metadata) => {
+                        let digest_matches = image_digest(image)
+                            .map(|digest| digest == metadata.digest)
+                            .unwrap_or(false);
+                        let allowed =
+                            pinned_by_digest && digest_matches && metadata.allowed_registry;
+                        let status_message = if allowed {
+                            "Image reference is digest-pinned and verified against registry metadata."
+                                .to_string()
+                        } else if !pinned_by_digest {
+                            "Image reference is resolved from registry metadata but must be pinned before start."
+                                .to_string()
+                        } else if !metadata.allowed_registry {
+                            "Image registry is not allowed by Docker trust policy.".to_string()
+                        } else {
+                            "Image digest did not match registry metadata.".to_string()
+                        };
+
+                        DockerImageTrustEvaluation {
+                            profile: *profile,
+                            image: image.to_string(),
+                            pinned_by_digest,
+                            registry_allowed: metadata.allowed_registry,
+                            metadata_verified: digest_matches,
+                            allowed,
+                            metadata: Some(metadata),
+                            status_message,
+                        }
+                    }
+                    Err(error) => DockerImageTrustEvaluation {
+                        profile: *profile,
+                        image: image.to_string(),
+                        pinned_by_digest,
+                        registry_allowed: image_registry_allowed(image),
+                        metadata_verified: false,
+                        allowed: false,
+                        metadata: None,
+                        status_message: format!(
+                            "Image registry metadata verification failed: {error}"
+                        ),
+                    },
+                }
+            })
+            .collect()
+    }
+
+    fn inspect_registry_metadata(&self, image: &str) -> AppResult<DockerRegistryTrustMetadata> {
+        validate_image_reference(image)?;
+        let output = self.run_docker(
+            [
+                "buildx".to_string(),
+                "imagetools".to_string(),
+                "inspect".to_string(),
+                image.to_string(),
+                "--format".to_string(),
+                "{\"digest\":\"{{.Manifest.Digest}}\",\"mediaType\":\"{{.Manifest.MediaType}}\",\"platformCount\":{{len .Manifest.Manifests}}}".to_string(),
+            ],
+            IMAGE_INSPECT_TIMEOUT,
+        )?;
+
+        if output.exit_code == Some(0) && !output.timed_out {
+            return parse_registry_metadata(image, &output.stdout);
+        }
+
+        let fallback = self.run_docker(
+            [
+                "buildx".to_string(),
+                "imagetools".to_string(),
+                "inspect".to_string(),
+                image.to_string(),
+            ],
+            IMAGE_INSPECT_TIMEOUT,
+        )?;
+        ensure_successful_output("docker buildx imagetools inspect", &fallback)?;
+
+        parse_text_registry_metadata(image, &fallback.stdout)
+    }
 }
 
-fn configured_images() -> BTreeMap<DockerComposeProfile, String> {
-    [
+fn configured_images(
+    image_overrides: &[DockerProjectImageOverride],
+) -> AppResult<BTreeMap<DockerComposeProfile, String>> {
+    let mut images = [
+        (DockerComposeProfile::Mailpit, "AXIOM_DOCKER_MAILPIT_IMAGE"),
         (DockerComposeProfile::Php, "AXIOM_DOCKER_PHP_IMAGE"),
         (DockerComposeProfile::Mysql, "AXIOM_DOCKER_MYSQL_IMAGE"),
         (
             DockerComposeProfile::Postgresql,
             "AXIOM_DOCKER_POSTGRES_IMAGE",
         ),
+        (DockerComposeProfile::Redis, "AXIOM_DOCKER_REDIS_IMAGE"),
         (
             DockerComposeProfile::ReverseProxy,
             "AXIOM_DOCKER_REVERSE_PROXY_IMAGE",
@@ -674,7 +835,14 @@ fn configured_images() -> BTreeMap<DockerComposeProfile, String> {
             .filter(|value| !value.is_empty())
             .map(|value| (profile, value))
     })
-    .collect()
+    .collect::<BTreeMap<_, _>>();
+
+    for image_override in image_overrides {
+        validate_image_reference(&image_override.image)?;
+        images.insert(image_override.profile, image_override.image.clone());
+    }
+
+    Ok(images)
 }
 
 fn planned_volumes(
@@ -702,13 +870,22 @@ fn planned_volumes(
         });
     }
 
+    if profiles.contains(&DockerComposeProfile::Redis) {
+        volumes.push(DockerProjectVolumePlan {
+            name: redis_volume_name(&project.id.0),
+            service_name: "redis".to_string(),
+            mount_path: "/data".to_string(),
+            created: false,
+        });
+    }
+
     volumes
 }
 
 fn ensure_plan_is_startable(plan: &DockerProjectComposePlan) -> AppResult<()> {
     if !plan.compose_file_written {
         return Err(AppError::PermissionDenied(
-            "Docker Compose start is blocked until all selected images are digest-pinned"
+            "Docker Compose start is blocked until all selected images are digest-pinned and registry metadata is verified"
                 .to_string(),
         ));
     }
@@ -722,7 +899,7 @@ fn ensure_plan_is_startable(plan: &DockerProjectComposePlan) -> AppResult<()> {
 
     if !blocked.is_empty() {
         return Err(AppError::PermissionDenied(format!(
-            "Docker image trust policy blocked unpinned images: {}",
+            "Docker image trust policy blocked images: {}",
             blocked.join(", ")
         )));
     }
@@ -753,9 +930,51 @@ fn deterministic_ports(project_id: &str) -> DockerProjectPorts {
 
     DockerProjectPorts {
         mysql_host_port: 33_060 + hash,
+        redis_host_port: 63_790 + hash,
+        mailpit_smtp_host_port: 10_250 + hash,
+        mailpit_web_host_port: 18_250 + hash,
         postgres_host_port: 54_320 + hash,
         reverse_proxy_host_port: 18_080 + hash,
     }
+}
+
+fn default_project_request(project: &Project) -> DockerProjectComposeRequest {
+    DockerProjectComposeRequest {
+        project_id: project.id.clone(),
+        profiles: Vec::new(),
+        image_overrides: Vec::new(),
+        resource_limits: DockerProjectResourceLimits::default(),
+    }
+}
+
+fn required_image_for_profile(
+    images: &BTreeMap<DockerComposeProfile, String>,
+    profile: DockerComposeProfile,
+) -> &str {
+    images
+        .get(&profile)
+        .map(String::as_str)
+        .unwrap_or_else(|| default_image(profile))
+}
+
+fn validate_resource_limits(resource_limits: DockerProjectResourceLimits) -> AppResult<()> {
+    if let Some(cpus) = resource_limits.cpus {
+        if !cpus.is_finite() || !(0.1..=16.0).contains(&cpus) {
+            return Err(AppError::Validation(
+                "Docker CPU limit must be between 0.10 and 16.00".to_string(),
+            ));
+        }
+    }
+
+    if let Some(memory_mb) = resource_limits.memory_mb {
+        if !(128..=65_536).contains(&memory_mb) {
+            return Err(AppError::Validation(
+                "Docker memory limit must be between 128 MB and 65536 MB".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn compose_project_name(project_id: &str) -> String {
@@ -782,6 +1001,289 @@ fn resolve_docker() -> AppResult<PathBuf> {
         .ok_or_else(|| {
             AppError::NotFound("Docker CLI executable was not found on PATH".to_string())
         })
+}
+
+fn validate_image_reference(image: &str) -> AppResult<()> {
+    let trimmed = image.trim();
+
+    if trimmed.is_empty() || trimmed != image || image.len() > 240 {
+        return Err(AppError::Validation(
+            "Docker image reference is invalid".to_string(),
+        ));
+    }
+
+    if image.starts_with('-')
+        || image.contains("..")
+        || image.contains("://")
+        || !image.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '/' | '_' | '-' | ':' | '@')
+        })
+    {
+        return Err(AppError::Validation(
+            "Docker image reference contains unsupported characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn parse_registry_metadata(image: &str, contents: &str) -> AppResult<DockerRegistryTrustMetadata> {
+    let value = serde_json::from_str::<Value>(contents.trim()).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "Docker registry metadata was not valid JSON: {error}"
+        ))
+    })?;
+    let manifest = value
+        .get("Manifest")
+        .or_else(|| value.get("manifest"))
+        .unwrap_or(&value);
+    let digest = json_string(manifest, &["Digest", "digest"])
+        .or_else(|| json_string(&value, &["Digest", "digest"]))
+        .ok_or_else(|| {
+            AppError::Infrastructure(
+                "Docker registry metadata did not include a digest".to_string(),
+            )
+        })?;
+    let media_type = json_string(manifest, &["MediaType", "mediaType"])
+        .or_else(|| json_string(&value, &["MediaType", "mediaType"]))
+        .unwrap_or_else(|| "unknown".to_string());
+    let platform_count = json_usize(manifest, &["PlatformCount", "platformCount"])
+        .or_else(|| json_usize(&value, &["PlatformCount", "platformCount"]))
+        .or_else(|| json_array_len(manifest, &["Manifests", "manifests"]))
+        .or_else(|| json_array_len(&value, &["Manifests", "manifests"]))
+        .unwrap_or(1);
+
+    Ok(metadata_from_parts(
+        image,
+        digest,
+        media_type,
+        platform_count,
+    ))
+}
+
+fn parse_text_registry_metadata(
+    image: &str,
+    contents: &str,
+) -> AppResult<DockerRegistryTrustMetadata> {
+    let digest = contents
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix("Digest:")
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            AppError::Infrastructure(
+                "Docker registry metadata did not include a digest".to_string(),
+            )
+        })?;
+    let media_type = contents
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix("MediaType:")
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let platform_count = contents
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Platform:"))
+        .count()
+        .max(1);
+
+    Ok(metadata_from_parts(
+        image,
+        digest,
+        media_type,
+        platform_count,
+    ))
+}
+
+fn metadata_from_parts(
+    image: &str,
+    digest: String,
+    media_type: String,
+    platform_count: usize,
+) -> DockerRegistryTrustMetadata {
+    let image_reference = parse_image_reference(image);
+    let allowed_registry = allowed_registries()
+        .iter()
+        .any(|registry| registry == &image_reference.registry);
+    let status_message = if allowed_registry {
+        "Registry metadata was resolved from an allowed registry.".to_string()
+    } else {
+        format!(
+            "Registry `{}` is not in the Docker trust allowlist.",
+            image_reference.registry
+        )
+    };
+
+    DockerRegistryTrustMetadata {
+        registry: image_reference.registry,
+        repository: image_reference.repository,
+        reference: image_reference.reference,
+        digest: normalize_digest(&digest),
+        media_type,
+        platform_count,
+        allowed_registry,
+        status_message,
+    }
+}
+
+fn json_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::to_string)
+}
+
+fn json_array_len(value: &Value, keys: &[&str]) -> Option<usize> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array))
+        .map(Vec::len)
+}
+
+fn json_usize(value: &Value, keys: &[&str]) -> Option<usize> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_u64))
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct ParsedImageReference {
+    registry: String,
+    repository: String,
+    reference: String,
+}
+
+fn parse_image_reference(image: &str) -> ParsedImageReference {
+    let without_digest = image
+        .split_once('@')
+        .map(|(left, _right)| left)
+        .unwrap_or(image);
+    let digest_reference = image
+        .split_once('@')
+        .map(|(_left, right)| right.to_string());
+    let parts = without_digest.split('/').collect::<Vec<_>>();
+    let first = parts.first().copied().unwrap_or_default();
+    let has_explicit_registry =
+        parts.len() > 1 && (first.contains('.') || first.contains(':') || first == "localhost");
+    let (registry, repository_with_tag) = if has_explicit_registry {
+        (
+            first.to_string(),
+            parts.get(1..).unwrap_or_default().join("/"),
+        )
+    } else {
+        ("docker.io".to_string(), without_digest.to_string())
+    };
+    let repository_with_library = if registry == "docker.io" && !repository_with_tag.contains('/') {
+        format!("library/{repository_with_tag}")
+    } else {
+        repository_with_tag
+    };
+    let (repository, tag) = split_repository_tag(&repository_with_library);
+    let reference = digest_reference
+        .or_else(|| tag.map(str::to_string))
+        .unwrap_or_else(|| "latest".to_string());
+
+    ParsedImageReference {
+        registry,
+        repository,
+        reference,
+    }
+}
+
+fn split_repository_tag(repository_with_tag: &str) -> (String, Option<&str>) {
+    let last_slash = repository_with_tag.rfind('/');
+    let last_colon = repository_with_tag.rfind(':');
+
+    if let Some(colon_index) = last_colon {
+        if last_slash.is_none_or(|slash_index| colon_index > slash_index) {
+            return (
+                repository_with_tag[..colon_index].to_string(),
+                Some(&repository_with_tag[colon_index + 1..]),
+            );
+        }
+    }
+
+    (repository_with_tag.to_string(), None)
+}
+
+fn pin_image_reference(image: &str, digest: &str) -> String {
+    if image_is_digest_pinned(image) {
+        return image.to_string();
+    }
+
+    format!("{}@{}", image, normalize_digest(digest))
+}
+
+fn image_digest(image: &str) -> Option<String> {
+    image
+        .split_once('@')
+        .map(|(_left, digest)| normalize_digest(digest))
+}
+
+fn normalize_digest(digest: &str) -> String {
+    let trimmed = digest.trim();
+
+    if trimmed.starts_with("sha256:") {
+        trimmed.to_string()
+    } else {
+        format!("sha256:{trimmed}")
+    }
+}
+
+fn image_registry_allowed(image: &str) -> bool {
+    let image_reference = parse_image_reference(image);
+
+    allowed_registries()
+        .iter()
+        .any(|registry| registry == &image_reference.registry)
+}
+
+fn allowed_registries() -> Vec<String> {
+    env::var("AXIOM_DOCKER_ALLOWED_REGISTRIES")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|registries| !registries.is_empty())
+        .unwrap_or_else(|| {
+            DEFAULT_ALLOWED_REGISTRIES
+                .iter()
+                .map(|registry| (*registry).to_string())
+                .collect()
+        })
+}
+
+fn configured_docker_context() -> AppResult<Option<String>> {
+    let Some(context) = env::var("AXIOM_DOCKER_CONTEXT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if context
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
+    {
+        return Ok(Some(context));
+    }
+
+    Err(AppError::Validation(
+        "Docker context name contains unsupported characters".to_string(),
+    ))
 }
 
 fn parse_compose_containers(contents: &str) -> Vec<DockerProjectContainerStatus> {
@@ -892,6 +1394,8 @@ fn volume_service_name(volume_name: &str) -> String {
         "mysql".to_string()
     } else if volume_name.contains("_postgres_") {
         "postgres".to_string()
+    } else if volume_name.contains("_redis_") {
+        "redis".to_string()
     } else {
         "unknown".to_string()
     }
@@ -902,6 +1406,8 @@ fn volume_mount_path(volume_name: &str) -> String {
         "/var/lib/mysql".to_string()
     } else if volume_name.contains("_postgres_") {
         "/var/lib/postgresql/data".to_string()
+    } else if volume_name.contains("_redis_") {
+        "/data".to_string()
     } else {
         "unknown".to_string()
     }
@@ -946,5 +1452,42 @@ mod tests {
             sanitize_log_line("MYSQL_PASSWORD=secret"),
             "[redacted sensitive docker log line]"
         );
+    }
+
+    #[test]
+    fn parses_docker_hub_shorthand_image_references() {
+        let reference = parse_image_reference("redis:7-alpine");
+
+        assert_eq!(reference.registry, "docker.io");
+        assert_eq!(reference.repository, "library/redis");
+        assert_eq!(reference.reference, "7-alpine");
+    }
+
+    #[test]
+    fn pins_image_references_without_losing_tags() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let pinned = pin_image_reference("php:8.4-cli", &digest);
+
+        assert_eq!(pinned, format!("php:8.4-cli@sha256:{}", "a".repeat(64)));
+    }
+
+    #[test]
+    fn rejects_unsafe_resource_limits() {
+        assert!(validate_resource_limits(DockerProjectResourceLimits {
+            cpus: Some(0.05),
+            memory_mb: None,
+        })
+        .is_err());
+        assert!(validate_resource_limits(DockerProjectResourceLimits {
+            cpus: None,
+            memory_mb: Some(64),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn recognizes_redis_volume_metadata() {
+        assert_eq!(volume_service_name("axiom_project_redis_data"), "redis");
+        assert_eq!(volume_mount_path("axiom_project_redis_data"), "/data");
     }
 }
