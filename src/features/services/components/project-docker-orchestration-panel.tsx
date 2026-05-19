@@ -13,6 +13,7 @@ import {
   getProjectDockerStatus,
   readProjectDockerLogs,
   removeProjectDockerVolumes,
+  resolveProjectDockerImagePins,
   restartProjectDockerServices,
   startProjectDockerServices,
   stopProjectDockerServices,
@@ -20,7 +21,10 @@ import {
 import type {
   DockerComposeProfile,
   DockerDiagnosticsReport,
+  DockerImagePinResolutionReport,
   DockerProjectComposePlan,
+  DockerProjectImageOverride,
+  DockerProjectResourceLimits,
   DockerProjectLogReadResult,
   DockerProjectRuntimeStatus,
 } from "../types/docker.types";
@@ -30,6 +34,7 @@ type DockerAction =
   | "generate"
   | "logs"
   | "restart"
+  | "resolve"
   | "start"
   | "status"
   | "stop"
@@ -57,6 +62,16 @@ const PROFILE_OPTIONS: ReadonlyArray<{
     description: "Project-specific PostgreSQL service and named volume",
   },
   {
+    label: "Redis",
+    profile: "redis",
+    description: "Project-specific Redis cache service and named volume",
+  },
+  {
+    label: "Mailpit",
+    profile: "mailpit",
+    description: "Project-specific SMTP capture and web mailbox service",
+  },
+  {
     label: "Reverse proxy",
     profile: "reverseProxy",
     description: "Project-specific reverse proxy in front of PHP",
@@ -64,6 +79,14 @@ const PROFILE_OPTIONS: ReadonlyArray<{
 ];
 
 const DEFAULT_PROFILES = new Set<DockerComposeProfile>(["php"]);
+const DEFAULT_IMAGE_OVERRIDES: Record<DockerComposeProfile, string> = {
+  mailpit: "axllent/mailpit:v1.22",
+  mysql: "mysql:8.4",
+  php: "php:8.4-cli",
+  postgresql: "postgres:17",
+  redis: "redis:7-alpine",
+  reverseProxy: "nginx:1.27-alpine",
+};
 
 function getErrorMessage(error: unknown) {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -81,25 +104,55 @@ function selectedProfiles(profileState: Record<DockerComposeProfile, boolean>) {
   return PROFILE_OPTIONS.map((option) => option.profile).filter((profile) => profileState[profile]);
 }
 
+function selectedImageOverrides(
+  profiles: DockerComposeProfile[],
+  imageState: Record<DockerComposeProfile, string>,
+): DockerProjectImageOverride[] {
+  return profiles
+    .map((profile) => ({
+      image: imageState[profile].trim(),
+      profile,
+    }))
+    .filter((override) => override.image.length > 0);
+}
+
 export function ProjectDockerOrchestrationPanel() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [profileState, setProfileState] = useState<Record<DockerComposeProfile, boolean>>({
+    mailpit: false,
     mysql: false,
     php: true,
     postgresql: false,
+    redis: false,
     reverseProxy: false,
   });
+  const [imageState, setImageState] =
+    useState<Record<DockerComposeProfile, string>>(DEFAULT_IMAGE_OVERRIDES);
+  const [cpuLimit, setCpuLimit] = useState("");
+  const [memoryLimit, setMemoryLimit] = useState("");
   const [tailLines, setTailLines] = useState(200);
   const [diagnostics, setDiagnostics] = useState<DockerDiagnosticsReport>();
   const [plan, setPlan] = useState<DockerProjectComposePlan>();
   const [runtime, setRuntime] = useState<DockerProjectRuntimeStatus>();
   const [logs, setLogs] = useState<DockerProjectLogReadResult>();
+  const [pinReport, setPinReport] = useState<DockerImagePinResolutionReport>();
   const [busyAction, setBusyAction] = useState<DockerAction>();
   const [errorMessage, setErrorMessage] = useState<string>();
   const [noticeMessage, setNoticeMessage] = useState<string>();
 
   const profiles = useMemo(() => selectedProfiles(profileState), [profileState]);
+  const imageOverrides = useMemo(
+    () => selectedImageOverrides(profiles, imageState),
+    [imageState, profiles],
+  );
+  const resourceLimits = useMemo<DockerProjectResourceLimits>(
+    () => ({
+      cpus: cpuLimit.trim().length > 0 ? Number(cpuLimit) : null,
+      memoryMb: memoryLimit.trim().length > 0 ? Number(memoryLimit) : null,
+    }),
+    [cpuLimit, memoryLimit],
+  );
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const canRunProjectCommand = Boolean(selectedProjectId) && !busyAction;
 
@@ -169,9 +222,35 @@ export function ProjectDockerOrchestrationPanel() {
 
     void runAction(
       "generate",
-      () => generateProjectDockerCompose(selectedProjectId, profiles),
+      () =>
+        generateProjectDockerCompose(selectedProjectId, profiles, imageOverrides, resourceLimits),
       (result) => {
         setPlan(result);
+        setNoticeMessage(result.statusMessage);
+      },
+    );
+  };
+
+  const resolveImagePins = () => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    void runAction(
+      "resolve",
+      () =>
+        resolveProjectDockerImagePins(selectedProjectId, profiles, imageOverrides, resourceLimits),
+      (result) => {
+        setPinReport(result);
+        setImageState((currentState) => {
+          const nextState = { ...currentState };
+
+          for (const resolution of result.resolutions) {
+            nextState[resolution.profile] = resolution.pinnedImage;
+          }
+
+          return nextState;
+        });
         setNoticeMessage(result.statusMessage);
       },
     );
@@ -199,7 +278,7 @@ export function ProjectDockerOrchestrationPanel() {
 
     void runAction(
       "start",
-      () => startProjectDockerServices(selectedProjectId, profiles),
+      () => startProjectDockerServices(selectedProjectId, profiles, imageOverrides, resourceLimits),
       (result) => {
         setPlan(result.plan);
         setRuntime(result.runtime);
@@ -231,7 +310,8 @@ export function ProjectDockerOrchestrationPanel() {
 
     void runAction(
       "restart",
-      () => restartProjectDockerServices(selectedProjectId, profiles),
+      () =>
+        restartProjectDockerServices(selectedProjectId, profiles, imageOverrides, resourceLimits),
       (result) => {
         setPlan(result.plan);
         setRuntime(result.runtime);
@@ -247,7 +327,7 @@ export function ProjectDockerOrchestrationPanel() {
 
     void runAction(
       "volumes:create",
-      () => ensureProjectDockerVolumes(selectedProjectId, profiles),
+      () => ensureProjectDockerVolumes(selectedProjectId, profiles, imageOverrides, resourceLimits),
       (result) => {
         setNoticeMessage(result.statusMessage);
         void getProjectDockerStatus(selectedProjectId).then(setRuntime);
@@ -370,6 +450,65 @@ export function ProjectDockerOrchestrationPanel() {
             ))}
           </div>
 
+          <div className="grid gap-2 border border-voicebox-border bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide">Image pinning</p>
+            <p className="text-xs text-voicebox-secondary">
+              Start is blocked until every selected image is pinned with a sha256 digest and
+              verified against allowed registry metadata.
+            </p>
+            {PROFILE_OPTIONS.filter((option) => profiles.includes(option.profile)).map((option) => (
+              <label
+                className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide"
+                key={option.profile}
+              >
+                {option.label} image
+                <input
+                  className="border border-voicebox-border bg-voicebox-surface px-3 py-2 font-mono text-xs normal-case text-voicebox-primary outline-none focus:border-voicebox-black focus:ring-2 focus:ring-voicebox-black"
+                  disabled={Boolean(busyAction)}
+                  onChange={(event) =>
+                    setImageState((currentState) => ({
+                      ...currentState,
+                      [option.profile]: event.target.value,
+                    }))
+                  }
+                  spellCheck={false}
+                  value={imageState[option.profile]}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="grid gap-3 border border-voicebox-border bg-white p-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide">
+              CPU limit
+              <input
+                className="border border-voicebox-border bg-voicebox-surface px-3 py-2 font-mono text-xs text-voicebox-primary outline-none focus:border-voicebox-black focus:ring-2 focus:ring-voicebox-black"
+                disabled={Boolean(busyAction)}
+                inputMode="decimal"
+                min="0.1"
+                onChange={(event) => setCpuLimit(event.target.value)}
+                placeholder="Optional"
+                step="0.1"
+                type="number"
+                value={cpuLimit}
+              />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide">
+              Memory MB
+              <input
+                className="border border-voicebox-border bg-voicebox-surface px-3 py-2 font-mono text-xs text-voicebox-primary outline-none focus:border-voicebox-black focus:ring-2 focus:ring-voicebox-black"
+                disabled={Boolean(busyAction)}
+                inputMode="numeric"
+                min="128"
+                onChange={(event) => setMemoryLimit(event.target.value)}
+                placeholder="Optional"
+                step="128"
+                type="number"
+                value={memoryLimit}
+              />
+            </label>
+          </div>
+
           <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide">
             Log tail
             <Select
@@ -389,6 +528,9 @@ export function ProjectDockerOrchestrationPanel() {
           <div className="flex flex-wrap gap-2">
             <Button disabled={!canRunProjectCommand} onClick={generateCompose} variant="secondary">
               Generate Compose
+            </Button>
+            <Button disabled={!canRunProjectCommand} onClick={resolveImagePins} variant="secondary">
+              Resolve Pins
             </Button>
             <Button disabled={!canRunProjectCommand} onClick={refreshStatus} variant="secondary">
               Status
@@ -431,6 +573,28 @@ export function ProjectDockerOrchestrationPanel() {
             </div>
           ) : null}
 
+          {pinReport ? (
+            <div className="border border-voicebox-border bg-white p-3 text-sm">
+              <p className="font-semibold">{pinReport.statusMessage}</p>
+              <div className="mt-3 grid gap-2">
+                {pinReport.resolutions.map((resolution) => (
+                  <div
+                    className="grid gap-1 border border-voicebox-border bg-voicebox-surface p-2 text-xs"
+                    key={`${resolution.profile}-${resolution.pinnedImage}`}
+                  >
+                    <p className="font-mono uppercase">{resolution.profile}</p>
+                    <p className="break-all">{resolution.pinnedImage}</p>
+                    <p>{resolution.metadata.statusMessage}</p>
+                    <p className="font-mono text-voicebox-secondary">
+                      {resolution.metadata.registry} / {resolution.metadata.platformCount} platform
+                      manifests
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {plan ? (
             <div className="border border-voicebox-border bg-white p-3 text-sm">
               <div className="flex flex-wrap justify-between gap-3">
@@ -453,6 +617,16 @@ export function ProjectDockerOrchestrationPanel() {
                     <p className={trust.allowed ? "text-voicebox-success" : "text-voicebox-red"}>
                       {trust.statusMessage}
                     </p>
+                    <p className="mt-1 font-mono text-voicebox-secondary">
+                      registry {trust.registryAllowed ? "allowed" : "blocked"} / metadata{" "}
+                      {trust.metadataVerified ? "verified" : "not verified"}
+                    </p>
+                    {trust.metadata ? (
+                      <p className="break-all font-mono text-voicebox-secondary">
+                        {trust.metadata.registry}/{trust.metadata.repository}{" "}
+                        {trust.metadata.digest}
+                      </p>
+                    ) : null}
                   </div>
                 ))}
               </div>
