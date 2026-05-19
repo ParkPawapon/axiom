@@ -187,7 +187,7 @@ impl DockerComposeGenerator {
 
         let reverse_proxy_config = profiles
             .contains(&DockerComposeProfile::ReverseProxy)
-            .then(|| reverse_proxy_config());
+            .then(reverse_proxy_config);
 
         if profiles.contains(&DockerComposeProfile::ReverseProxy) {
             let image =
