@@ -17,6 +17,7 @@ import type { ManagedService } from "../../services/types/service.types";
 import {
   backupProjectDatabase,
   createProjectDatabaseMigration,
+  enrollDatabaseBackupArtifactTrust,
   exportDatabaseBackupTrustBundle,
   generateProjectDatabaseMigrationRollback,
   getDatabaseBackupKeyManagementStatus,
@@ -77,6 +78,7 @@ type ActionKey =
   | "scheduler:install"
   | "scheduler:uninstall"
   | "trust:export"
+  | "trust:enroll"
   | "trust:import"
   | "trust:refresh";
 
@@ -408,8 +410,8 @@ export function DatabasesPage() {
         result.encrypted ? "Encrypted" : "Not encrypted",
         result.compressed ? "Compressed" : "Not compressed",
         result.signaturePath ? "Signed" : "Unsigned",
-        result.remoteCopyPaths.length > 0
-          ? `Copied to ${result.remoteCopyPaths.length} remote artifact(s).`
+        result.remoteCopyReceipts.length > 0
+          ? `Copied to ${result.remoteCopyReceipts.length} remote artifact(s) with integrity receipts.`
           : undefined,
         result.prunedBackupPaths.length > 0
           ? `Pruned ${result.prunedBackupPaths.length} expired artifact(s).`
@@ -543,8 +545,8 @@ export function DatabasesPage() {
       return [
         result.statusMessage,
         `Base: ${result.restore.restoredFromPath}`,
-        result.replayedLogPaths.length > 0
-          ? `Replayed ${result.replayedLogPaths.length} segment(s).`
+        result.replaySegments.length > 0
+          ? `Replayed ${result.replaySegments.length} verified segment(s).`
           : "No replay segments matched the target.",
       ].join(" ");
     });
@@ -715,6 +717,35 @@ export function DatabasesPage() {
     })();
   };
 
+  const enrollArtifactTrust = () => {
+    void (async () => {
+      setErrorMessage(undefined);
+      const selectedPath = await open({
+        directory: false,
+        filters: [{ extensions: ["sql", "gz", "enc"], name: "Database backup artifact" }],
+        multiple: false,
+      });
+
+      if (typeof selectedPath !== "string") {
+        return;
+      }
+
+      void runAction("trust:enroll", async () => {
+        const result = await enrollDatabaseBackupArtifactTrust(selectedPath);
+        await loadKeyManagementStatus();
+        return [
+          result.statusMessage,
+          `Artifact ${result.artifactSha256.slice(0, 16)}...`,
+          result.trustedSigningKeyFingerprint
+            ? `Signing key ${result.trustedSigningKeyFingerprint.slice(0, 16)}...`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ");
+      });
+    })();
+  };
+
   const runMigrations = (databaseType: DatabaseType) => {
     if (!selectedProjectId) {
       return;
@@ -839,6 +870,13 @@ export function DatabasesPage() {
             variant="secondary"
           >
             Import trust bundle
+          </Button>
+          <Button
+            disabled={actionKey === "trust:enroll"}
+            onClick={enrollArtifactTrust}
+            variant="secondary"
+          >
+            Enroll artifact trust
           </Button>
         </div>
         {schedulerStatus ? (

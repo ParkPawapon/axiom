@@ -1,6 +1,7 @@
 import { invokeTauriCommand } from "../../../core/api/tauri-client";
 import type {
   DatabaseBackupOptions,
+  DatabaseBackupArtifactTrustEnrollmentResult,
   DatabaseBackupKeyManagementStatus,
   DatabaseBackupPolicy,
   DatabaseBackupPolicyUpdate,
@@ -118,6 +119,13 @@ export function importDatabaseBackupTrustBundle(trustBundlePath: string) {
   return invokeTauriCommand<DatabaseBackupTrustImportResult>(
     "import_database_backup_trust_bundle",
     { trustBundlePath },
+  );
+}
+
+export function enrollDatabaseBackupArtifactTrust(backupPath: string) {
+  return invokeTauriCommand<DatabaseBackupArtifactTrustEnrollmentResult>(
+    "enroll_database_backup_artifact_trust",
+    { backupPath },
   );
 }
 

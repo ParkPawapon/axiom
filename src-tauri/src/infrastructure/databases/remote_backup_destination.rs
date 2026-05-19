@@ -1,9 +1,14 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::Utc;
+use sha2::{Digest, Sha256};
+
 use crate::domain::database::database_config::{
-    DatabaseBackupRemoteDestination, DatabaseBackupRemoteDestinationProvider, DatabaseBackupResult,
+    DatabaseBackupRemoteCopyReceipt, DatabaseBackupRemoteDestination,
+    DatabaseBackupRemoteDestinationProvider, DatabaseBackupResult,
 };
 use crate::domain::security::command_policy::{CommandPolicy, ProcessCommand, ProcessOutput};
 use crate::infrastructure::process::command_runner::CommandRunner;
@@ -19,7 +24,7 @@ const R2_ENDPOINT_URL_ENV: &str = "AXIOM_R2_ENDPOINT_URL";
 pub fn copy_backup_to_remote_destination(
     result: &DatabaseBackupResult,
     destination: &DatabaseBackupRemoteDestination,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
     if !destination.enabled {
         return Ok(Vec::new());
     }
@@ -50,7 +55,7 @@ pub fn copy_backup_to_remote_destination(
 fn copy_backup_to_local_destination(
     result: &DatabaseBackupResult,
     destination: &DatabaseBackupRemoteDestination,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
     let destination_root = validate_local_destination_path(&destination.destination_path)?;
     let scoped_destination = destination_root
         .join(&destination.project_id.0)
@@ -62,8 +67,14 @@ fn copy_backup_to_local_destination(
 
     let mut copied_paths = Vec::new();
     for source_path in backup_artifact_paths(result) {
+        let source_path = validate_source_artifact(&source_path)?;
         let copied_path = copy_one_local(&source_path, &scoped_destination)?;
-        copied_paths.push(copied_path.to_string_lossy().into_owned());
+        copied_paths.push(remote_copy_receipt(
+            destination,
+            &source_path,
+            copied_path.to_string_lossy().into_owned(),
+            true,
+        )?);
     }
 
     Ok(copied_paths)
@@ -73,7 +84,7 @@ fn copy_backup_with_aws_cli(
     result: &DatabaseBackupResult,
     destination: &DatabaseBackupRemoteDestination,
     endpoint_url: Option<String>,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
     validate_cloud_destination_uri(&destination.destination_path, "s3://")?;
     let aws_path = resolve_required_executable("aws")?;
     let runner = remote_runner(&aws_path);
@@ -97,7 +108,12 @@ fn copy_backup_with_aws_cli(
             "aws s3 backup copy",
             run_remote_copy(&runner, &aws_path, args)?,
         )?;
-        copied_paths.push(target);
+        copied_paths.push(remote_copy_receipt(
+            destination,
+            &source_path,
+            target,
+            true,
+        )?);
     }
 
     Ok(copied_paths)
@@ -106,7 +122,7 @@ fn copy_backup_with_aws_cli(
 fn copy_backup_with_gcloud(
     result: &DatabaseBackupResult,
     destination: &DatabaseBackupRemoteDestination,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
     validate_cloud_destination_uri(&destination.destination_path, "gs://")?;
     let gcloud_path = resolve_required_executable("gcloud")?;
     let runner = remote_runner(&gcloud_path);
@@ -129,7 +145,12 @@ fn copy_backup_with_gcloud(
                 ],
             )?,
         )?;
-        copied_paths.push(target);
+        copied_paths.push(remote_copy_receipt(
+            destination,
+            &source_path,
+            target,
+            true,
+        )?);
     }
 
     Ok(copied_paths)
@@ -138,7 +159,7 @@ fn copy_backup_with_gcloud(
 fn copy_backup_with_scp(
     result: &DatabaseBackupResult,
     destination: &DatabaseBackupRemoteDestination,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
     validate_cloud_destination_uri(&destination.destination_path, "sftp://")?;
     let scp_path = resolve_required_executable("scp")?;
     let runner = remote_runner(&scp_path);
@@ -157,7 +178,12 @@ fn copy_backup_with_scp(
                 [source_path.to_string_lossy().into_owned(), scp_target],
             )?,
         )?;
-        copied_paths.push(target_uri);
+        copied_paths.push(remote_copy_receipt(
+            destination,
+            &source_path,
+            target_uri,
+            true,
+        )?);
     }
 
     Ok(copied_paths)
@@ -213,8 +239,7 @@ fn validate_cloud_destination_uri(value: &str, prefix: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn copy_one_local(source_path: &str, destination_dir: &Path) -> AppResult<PathBuf> {
-    let source_path = validate_source_artifact(source_path)?;
+fn copy_one_local(source_path: &Path, destination_dir: &Path) -> AppResult<PathBuf> {
     let file_name = source_path
         .file_name()
         .ok_or_else(|| AppError::Validation("backup artifact has no file name".to_string()))?;
@@ -280,6 +305,69 @@ fn sftp_uri_to_scp_target(uri: &str) -> AppResult<String> {
     }
 
     Ok(format!("{host}:/{path}"))
+}
+
+fn remote_copy_receipt(
+    destination: &DatabaseBackupRemoteDestination,
+    source_path: &Path,
+    remote_uri: String,
+    verified: bool,
+) -> AppResult<DatabaseBackupRemoteCopyReceipt> {
+    Ok(DatabaseBackupRemoteCopyReceipt {
+        provider: destination.provider,
+        artifact_path: source_path.to_string_lossy().into_owned(),
+        remote_uri,
+        sha256: sha256_file_hex(source_path)?,
+        size_bytes: source_path
+            .metadata()
+            .map(|metadata| metadata.len())
+            .map_err(|error| {
+                AppError::Infrastructure(format!(
+                    "failed to inspect copied backup artifact: {error}"
+                ))
+            })?,
+        copied_at: Utc::now(),
+        verified,
+        status_message:
+            "Remote backup artifact was copied and recorded with local integrity metadata."
+                .to_string(),
+    })
+}
+
+fn sha256_file_hex(path: &Path) -> AppResult<String> {
+    let mut file = fs::File::open(path).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to open backup artifact for hashing: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read_count = file.read(&mut buffer).map_err(|error| {
+            AppError::Infrastructure(format!("failed to hash backup artifact: {error}"))
+        })?;
+
+        if read_count == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..read_count]);
+    }
+
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    encoded
 }
 
 fn resolve_required_executable(name: &str) -> AppResult<PathBuf> {
@@ -363,5 +451,39 @@ mod tests {
             sftp_uri_to_scp_target("sftp://user@example.com/backups/demo.sql").expect("scp target");
 
         assert_eq!(target, "user@example.com:/backups/demo.sql");
+    }
+
+    #[test]
+    fn remote_copy_receipts_include_integrity_metadata() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("axiom-remote-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("temp dir");
+        let artifact = temp_dir.join("demo.sql");
+        fs::write(&artifact, "select 1;").expect("artifact");
+        let destination = DatabaseBackupRemoteDestination {
+            project_id: ProjectId("demo".to_string()),
+            database_type: DatabaseType::Mysql,
+            provider: DatabaseBackupRemoteDestinationProvider::S3,
+            enabled: true,
+            destination_path: "s3://bucket/prefix".to_string(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let receipt = remote_copy_receipt(
+            &destination,
+            &artifact,
+            "s3://bucket/prefix/demo/mysql/demo.sql".to_string(),
+            true,
+        )
+        .expect("receipt");
+
+        assert_eq!(
+            receipt.provider,
+            DatabaseBackupRemoteDestinationProvider::S3
+        );
+        assert_eq!(receipt.size_bytes, 9);
+        assert!(receipt.verified);
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

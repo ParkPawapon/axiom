@@ -133,7 +133,31 @@ pub struct DatabaseBackupMetadata {
     pub compressed: bool,
     pub encrypted: bool,
     pub size_bytes: u64,
+    #[serde(default)]
+    pub kms_envelope: Option<DatabaseBackupKmsEnvelope>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupKmsEnvelope {
+    pub provider: String,
+    pub key_id: String,
+    pub encrypted_data_key_fingerprint: String,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupRemoteCopyReceipt {
+    pub provider: DatabaseBackupRemoteDestinationProvider,
+    pub artifact_path: String,
+    pub remote_uri: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub copied_at: DateTime<Utc>,
+    pub verified: bool,
+    pub status_message: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -151,6 +175,8 @@ pub struct DatabaseBackupResult {
     pub size_bytes: u64,
     pub pruned_backup_paths: Vec<String>,
     pub remote_copy_paths: Vec<String>,
+    #[serde(default)]
+    pub remote_copy_receipts: Vec<DatabaseBackupRemoteCopyReceipt>,
     pub status_message: String,
 }
 
@@ -339,7 +365,27 @@ pub struct DatabaseContinuousReplayRestoreResult {
     pub target_time: Option<DateTime<Utc>>,
     pub restore: DatabaseRestoreResult,
     pub replayed_log_paths: Vec<String>,
+    #[serde(default)]
+    pub replay_segments: Vec<DatabaseReplaySegment>,
     pub status_message: String,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseReplaySegmentKind {
+    MysqlBinlog,
+    PostgresWalSql,
+    Sql,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseReplaySegment {
+    pub kind: DatabaseReplaySegmentKind,
+    pub source_path: String,
+    pub applied_sql_path: String,
+    pub sha256: String,
+    pub applied_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -359,6 +405,10 @@ pub struct DatabaseBackupTrustBundle {
     pub version: u16,
     pub algorithm: String,
     pub signing_key_fingerprint: String,
+    #[serde(default)]
+    pub artifact_sha256: Option<String>,
+    #[serde(default)]
+    pub source_machine: Option<String>,
     pub exported_at: DateTime<Utc>,
 }
 
@@ -375,5 +425,14 @@ pub struct DatabaseBackupTrustExportResult {
 pub struct DatabaseBackupTrustImportResult {
     pub trust_bundle_path: String,
     pub trusted_signing_key_fingerprint: String,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupArtifactTrustEnrollmentResult {
+    pub backup_path: String,
+    pub artifact_sha256: String,
+    pub trusted_signing_key_fingerprint: Option<String>,
     pub status_message: String,
 }

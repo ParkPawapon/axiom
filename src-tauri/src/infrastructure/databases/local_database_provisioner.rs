@@ -1,15 +1,19 @@
 use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::Utc;
 use directories::ProjectDirs;
+use sha2::{Digest, Sha256};
 
 use crate::domain::database::database_config::{
     DatabaseBackupOptions, DatabaseBackupResult, DatabaseContinuousReplayRestoreResult,
     DatabaseMigrationFile, DatabaseMigrationRollbackGenerationResult,
     DatabaseMigrationRollbackResult, DatabaseMigrationRunResult, DatabaseProvisioningResult,
-    DatabaseProvisioningStatus, DatabaseRestoreResult, ProjectDatabaseProfile,
+    DatabaseProvisioningStatus, DatabaseReplaySegment, DatabaseReplaySegmentKind,
+    DatabaseRestoreResult, ProjectDatabaseProfile,
 };
 use crate::domain::database::database_type::DatabaseType;
 use crate::domain::project::project::Project;
@@ -187,6 +191,7 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
             size_bytes: artifact.size_bytes,
             pruned_backup_paths: artifact.pruned_backup_paths,
             remote_copy_paths: Vec::new(),
+            remote_copy_receipts: Vec::new(),
             status_message:
                 "Database backup completed with managed retention and artifact processing."
                     .to_string(),
@@ -256,6 +261,7 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         })?;
 
         let mut replayed_log_paths = Vec::new();
+        let mut replay_segments = Vec::new();
         for replay_log_path in replay_log_paths {
             let sql_path = prepare_replay_sql(profile, &replay_log_path, &replay_work_dir)?;
 
@@ -268,6 +274,13 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
                 }
             }
 
+            replay_segments.push(DatabaseReplaySegment {
+                kind: replay_segment_kind(profile.database_type, &replay_log_path)?,
+                source_path: replay_log_path.to_string_lossy().into_owned(),
+                applied_sql_path: sql_path.to_string_lossy().into_owned(),
+                sha256: sha256_file_hex(&replay_log_path)?,
+                applied_at: Utc::now(),
+            });
             if sql_path.starts_with(&replay_work_dir) {
                 let _ = fs::remove_file(&sql_path);
             }
@@ -286,6 +299,7 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
                 replayed_log_paths.len()
             ),
             replayed_log_paths,
+            replay_segments,
         })
     }
 
@@ -569,12 +583,46 @@ fn is_replay_file(database_type: DatabaseType, path: &std::path::Path) -> AppRes
     }
 
     match database_type {
-        DatabaseType::Mysql => Ok(file_name.ends_with(".binlog") || file_name.ends_with(".bin")),
+        DatabaseType::Mysql => Ok(is_mysql_binlog_name(&file_name)),
         DatabaseType::Postgresql if file_name.ends_with(".wal") => Err(AppError::Validation(
             "PostgreSQL WAL physical replay requires server-level restore orchestration; provide WAL-derived .sql replay segments for this managed flow".to_string(),
         )),
         DatabaseType::Postgresql => Ok(false),
     }
+}
+
+fn replay_segment_kind(
+    database_type: DatabaseType,
+    path: &std::path::Path,
+) -> AppResult<DatabaseReplaySegmentKind> {
+    let file_name = path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if database_type == DatabaseType::Mysql && is_mysql_binlog_name(&file_name) {
+        return Ok(DatabaseReplaySegmentKind::MysqlBinlog);
+    }
+
+    if database_type == DatabaseType::Postgresql && file_name.ends_with(".wal.sql") {
+        return Ok(DatabaseReplaySegmentKind::PostgresWalSql);
+    }
+
+    if file_name.ends_with(".sql") {
+        return Ok(DatabaseReplaySegmentKind::Sql);
+    }
+
+    Err(AppError::Validation(
+        "replay segment type is not supported".to_string(),
+    ))
+}
+
+fn is_mysql_binlog_name(file_name: &str) -> bool {
+    file_name.ends_with(".binlog")
+        || file_name.ends_with(".bin")
+        || file_name.starts_with("mysql-bin.")
+        || file_name.starts_with("mariadb-bin.")
 }
 
 fn prepare_replay_sql(
@@ -695,6 +743,18 @@ fn generate_rollback_sql(sql: &str) -> GeneratedRollbackSql {
 
         if let Some(rollback) = rollback_create_table(statement) {
             statements.push(rollback);
+        } else if let Some(rollback) = rollback_create_index(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_create_view(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_create_schema(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_rename_table(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_rename_column(statement) {
+            statements.push(rollback);
+        } else if let Some(rollback) = rollback_add_constraint(statement) {
+            statements.push(rollback);
         } else if let Some(rollback) = rollback_add_column(statement) {
             statements.push(rollback);
         } else {
@@ -737,6 +797,70 @@ fn rollback_create_table(statement: &str) -> Option<String> {
     ))
 }
 
+fn rollback_create_index(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3
+        || !tokens[0].eq_ignore_ascii_case("create")
+        || !(tokens[1].eq_ignore_ascii_case("index")
+            || (tokens[1].eq_ignore_ascii_case("unique")
+                && tokens
+                    .get(2)
+                    .is_some_and(|token| token.eq_ignore_ascii_case("index"))))
+    {
+        return None;
+    }
+
+    let index_name = if tokens[1].eq_ignore_ascii_case("unique") {
+        tokens.get(3)?
+    } else {
+        tokens.get(2)?
+    };
+
+    Some(format!(
+        "DROP INDEX IF EXISTS {};",
+        trim_identifier_suffix(index_name)
+    ))
+}
+
+fn rollback_create_view(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3
+        || !tokens[0].eq_ignore_ascii_case("create")
+        || !tokens[1].eq_ignore_ascii_case("view")
+    {
+        return None;
+    }
+
+    Some(format!(
+        "DROP VIEW IF EXISTS {};",
+        trim_identifier_suffix(tokens[2])
+    ))
+}
+
+fn rollback_create_schema(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3
+        || !tokens[0].eq_ignore_ascii_case("create")
+        || !tokens[1].eq_ignore_ascii_case("schema")
+    {
+        return None;
+    }
+
+    let schema_name = if tokens
+        .get(2)
+        .is_some_and(|token| token.eq_ignore_ascii_case("if"))
+    {
+        tokens.get(5)?
+    } else {
+        tokens.get(2)?
+    };
+
+    Some(format!(
+        "DROP SCHEMA IF EXISTS {};",
+        trim_identifier_suffix(schema_name)
+    ))
+}
+
 fn rollback_add_column(statement: &str) -> Option<String> {
     let tokens = statement.split_whitespace().collect::<Vec<_>>();
     if tokens.len() < 6
@@ -763,6 +887,64 @@ fn rollback_add_column(statement: &str) -> Option<String> {
     ))
 }
 
+fn rollback_add_constraint(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 7
+        || !tokens[0].eq_ignore_ascii_case("alter")
+        || !tokens[1].eq_ignore_ascii_case("table")
+        || !tokens[3].eq_ignore_ascii_case("add")
+        || !tokens
+            .get(4)
+            .is_some_and(|token| token.eq_ignore_ascii_case("constraint"))
+    {
+        return None;
+    }
+
+    Some(format!(
+        "ALTER TABLE {} DROP CONSTRAINT {};",
+        trim_identifier_suffix(tokens[2]),
+        trim_identifier_suffix(tokens[5])
+    ))
+}
+
+fn rollback_rename_table(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 6
+        || !tokens[0].eq_ignore_ascii_case("alter")
+        || !tokens[1].eq_ignore_ascii_case("table")
+        || !tokens[3].eq_ignore_ascii_case("rename")
+        || !tokens[4].eq_ignore_ascii_case("to")
+    {
+        return None;
+    }
+
+    Some(format!(
+        "ALTER TABLE {} RENAME TO {};",
+        trim_identifier_suffix(tokens[5]),
+        trim_identifier_suffix(tokens[2])
+    ))
+}
+
+fn rollback_rename_column(statement: &str) -> Option<String> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 8
+        || !tokens[0].eq_ignore_ascii_case("alter")
+        || !tokens[1].eq_ignore_ascii_case("table")
+        || !tokens[3].eq_ignore_ascii_case("rename")
+        || !tokens[4].eq_ignore_ascii_case("column")
+        || !tokens[6].eq_ignore_ascii_case("to")
+    {
+        return None;
+    }
+
+    Some(format!(
+        "ALTER TABLE {} RENAME COLUMN {} TO {};",
+        trim_identifier_suffix(tokens[2]),
+        trim_identifier_suffix(tokens[7]),
+        trim_identifier_suffix(tokens[5])
+    ))
+}
+
 fn trim_identifier_suffix(value: &str) -> &str {
     value.trim_end_matches(|character| matches!(character, '(' | ',' | ';'))
 }
@@ -773,4 +955,102 @@ fn first_words(value: &str, limit: usize) -> String {
         .take(limit)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn sha256_file_hex(path: &std::path::Path) -> AppResult<String> {
+    let mut file = File::open(path).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to open replay segment for hashing: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read_count = file.read(&mut buffer).map_err(|error| {
+            AppError::Infrastructure(format!("failed to hash replay segment: {error}"))
+        })?;
+
+        if read_count == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..read_count]);
+    }
+
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generates_conservative_rollbacks_for_common_reversible_patterns() {
+        let generated = generate_rollback_sql(
+            r#"
+            CREATE TABLE users (id int);
+            ALTER TABLE users ADD COLUMN email text;
+            CREATE INDEX users_email_idx ON users(email);
+            ALTER TABLE users ADD CONSTRAINT users_email_unique UNIQUE(email);
+            CREATE VIEW active_users AS SELECT * FROM users;
+            ALTER TABLE users RENAME COLUMN email TO email_address;
+            "#,
+        );
+
+        assert!(generated
+            .statements
+            .iter()
+            .any(|statement| statement == "DROP TABLE IF EXISTS users;"));
+        assert!(generated
+            .statements
+            .iter()
+            .any(|statement| statement == "ALTER TABLE users DROP COLUMN email;"));
+        assert!(generated
+            .statements
+            .iter()
+            .any(|statement| statement == "DROP INDEX IF EXISTS users_email_idx;"));
+        assert!(generated.statements.iter().any(|statement| {
+            statement == "ALTER TABLE users DROP CONSTRAINT users_email_unique;"
+        }));
+        assert!(generated
+            .statements
+            .iter()
+            .any(|statement| statement == "DROP VIEW IF EXISTS active_users;"));
+        assert!(generated.statements.iter().any(|statement| {
+            statement == "ALTER TABLE users RENAME COLUMN email_address TO email;"
+        }));
+    }
+
+    #[test]
+    fn classifies_replay_segments() {
+        assert_eq!(
+            replay_segment_kind(
+                DatabaseType::Mysql,
+                std::path::Path::new("mysql-bin.000001")
+            )
+            .expect("mysql binlog"),
+            DatabaseReplaySegmentKind::MysqlBinlog
+        );
+        assert_eq!(
+            replay_segment_kind(
+                DatabaseType::Postgresql,
+                std::path::Path::new("0001.wal.sql")
+            )
+            .expect("postgres wal sql"),
+            DatabaseReplaySegmentKind::PostgresWalSql
+        );
+    }
 }
