@@ -55,6 +55,7 @@ pub fn run() {
             commands::database_commands::get_database_backup_key_management_status,
             commands::database_commands::export_database_backup_trust_bundle,
             commands::database_commands::import_database_backup_trust_bundle,
+            commands::database_commands::enroll_database_backup_artifact_trust,
             commands::database_commands::install_database_backup_scheduler,
             commands::database_commands::uninstall_database_backup_scheduler,
             commands::database_commands::restore_project_database,

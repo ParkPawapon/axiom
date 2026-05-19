@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::application::databases::backup_project_database_use_case;
 use crate::application::databases::create_project_database_migration_use_case;
+use crate::application::databases::enroll_database_backup_artifact_trust_use_case;
 use crate::application::databases::export_database_backup_trust_bundle_use_case;
 use crate::application::databases::generate_project_database_migration_rollback_use_case;
 use crate::application::databases::get_database_backup_key_management_status_use_case;
@@ -23,8 +24,9 @@ use crate::application::databases::update_database_backup_destination_use_case;
 use crate::application::databases::update_database_backup_policy_use_case;
 use crate::bootstrap::app_state::AppState;
 use crate::domain::database::database_config::{
-    DatabaseBackupKeyManagementStatus, DatabaseBackupOptions, DatabaseBackupPolicy,
-    DatabaseBackupPolicyUpdate, DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
+    DatabaseBackupArtifactTrustEnrollmentResult, DatabaseBackupKeyManagementStatus,
+    DatabaseBackupOptions, DatabaseBackupPolicy, DatabaseBackupPolicyUpdate,
+    DatabaseBackupPolicyUpdateResult, DatabaseBackupRemoteDestination,
     DatabaseBackupRemoteDestinationUpdate, DatabaseBackupRemoteDestinationUpdateResult,
     DatabaseBackupResult, DatabaseBackupSchedulerInstallResult, DatabaseBackupSchedulerStatus,
     DatabaseBackupTrustExportResult, DatabaseBackupTrustImportResult,
@@ -234,6 +236,24 @@ pub fn import_database_backup_trust_bundle(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database backup trust import command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn enroll_database_backup_artifact_trust(
+    state: State<'_, AppState>,
+    backup_path: String,
+) -> Result<DatabaseBackupArtifactTrustEnrollmentResult, CommandErrorPayload> {
+    enroll_database_backup_artifact_trust_use_case::enroll_database_backup_artifact_trust(
+        state.secure_storage(),
+        &backup_path,
+    )
+    .map_err(|error| {
+        tracing::warn!(
+            ?error,
+            "database backup artifact trust enrollment command failed"
+        );
         map_command_error(&error)
     })
 }
