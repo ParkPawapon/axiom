@@ -7,46 +7,104 @@ use crate::domain::project::project_id::ProjectId;
 )]
 #[serde(rename_all = "camelCase")]
 pub enum DockerComposeProfile {
+    Mailpit,
     Mysql,
     Php,
     Postgresql,
+    Redis,
     ReverseProxy,
 }
 
 impl DockerComposeProfile {
     pub fn as_key(self) -> &'static str {
         match self {
+            Self::Mailpit => "mailpit",
             Self::Mysql => "mysql",
             Self::Php => "php",
             Self::Postgresql => "postgresql",
+            Self::Redis => "redis",
             Self::ReverseProxy => "reverseProxy",
         }
     }
 
     pub fn compose_profile(self) -> &'static str {
         match self {
+            Self::Mailpit => "mailpit",
             Self::Mysql => "mysql",
             Self::Php => "php",
             Self::Postgresql => "postgresql",
+            Self::Redis => "redis",
             Self::ReverseProxy => "reverse-proxy",
         }
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockerProjectComposeRequest {
     pub project_id: ProjectId,
     pub profiles: Vec<DockerComposeProfile>,
+    #[serde(default)]
+    pub image_overrides: Vec<DockerProjectImageOverride>,
+    #[serde(default)]
+    pub resource_limits: DockerProjectResourceLimits,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerProjectImageOverride {
+    pub profile: DockerComposeProfile,
+    pub image: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerProjectResourceLimits {
+    pub cpus: Option<f32>,
+    pub memory_mb: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerRegistryTrustMetadata {
+    pub registry: String,
+    pub repository: String,
+    pub reference: String,
+    pub digest: String,
+    pub media_type: String,
+    pub platform_count: usize,
+    pub allowed_registry: bool,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerImagePinResolution {
+    pub profile: DockerComposeProfile,
+    pub source_image: String,
+    pub pinned_image: String,
+    pub metadata: DockerRegistryTrustMetadata,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerImagePinResolutionReport {
+    pub resolutions: Vec<DockerImagePinResolution>,
+    pub diagnostics: Vec<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockerImageTrustEvaluation {
     pub profile: DockerComposeProfile,
     pub image: String,
     pub pinned_by_digest: bool,
+    pub registry_allowed: bool,
+    pub metadata_verified: bool,
     pub allowed: bool,
+    pub metadata: Option<DockerRegistryTrustMetadata>,
     pub status_message: String,
 }
 
@@ -70,7 +128,7 @@ pub struct DockerProjectVolumePlan {
     pub created: bool,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockerProjectComposePlan {
     pub project_id: ProjectId,
@@ -84,6 +142,7 @@ pub struct DockerProjectComposePlan {
     pub services: Vec<DockerProjectServicePlan>,
     pub volumes: Vec<DockerProjectVolumePlan>,
     pub image_trust: Vec<DockerImageTrustEvaluation>,
+    pub resource_limits: DockerProjectResourceLimits,
     pub diagnostics: Vec<String>,
     pub generated_at: DateTime<Utc>,
     pub status_message: String,
@@ -112,7 +171,7 @@ pub struct DockerProjectRuntimeStatus {
     pub status_message: String,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockerProjectActionResult {
     pub project_id: ProjectId,

@@ -1,7 +1,7 @@
 use crate::domain::docker::docker_project::{
-    DockerComposeProfile, DockerDiagnosticsReport, DockerProjectActionResult,
-    DockerProjectComposePlan, DockerProjectLogReadResult, DockerProjectRuntimeStatus,
-    DockerProjectVolumeLifecycleResult,
+    DockerDiagnosticsReport, DockerImagePinResolutionReport, DockerProjectActionResult,
+    DockerProjectComposePlan, DockerProjectComposeRequest, DockerProjectLogReadResult,
+    DockerProjectRuntimeStatus, DockerProjectVolumeLifecycleResult,
 };
 use crate::domain::project::project::Project;
 use crate::shared::result::app_result::AppResult;
@@ -9,10 +9,15 @@ use crate::shared::result::app_result::AppResult;
 pub trait DockerProjectOrchestrator: Send + Sync {
     fn diagnostics(&self) -> AppResult<DockerDiagnosticsReport>;
 
+    fn resolve_image_pins(
+        &self,
+        request: &DockerProjectComposeRequest,
+    ) -> AppResult<DockerImagePinResolutionReport>;
+
     fn generate_compose_plan(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectComposePlan>;
 
     fn get_runtime_status(&self, project: &Project) -> AppResult<DockerProjectRuntimeStatus>;
@@ -20,7 +25,7 @@ pub trait DockerProjectOrchestrator: Send + Sync {
     fn start_project(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectActionResult>;
 
     fn stop_project(&self, project: &Project) -> AppResult<DockerProjectActionResult>;
@@ -28,13 +33,13 @@ pub trait DockerProjectOrchestrator: Send + Sync {
     fn restart_project(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectActionResult>;
 
     fn ensure_project_volumes(
         &self,
         project: &Project,
-        profiles: &[DockerComposeProfile],
+        request: &DockerProjectComposeRequest,
     ) -> AppResult<DockerProjectVolumeLifecycleResult>;
 
     fn remove_project_volumes(

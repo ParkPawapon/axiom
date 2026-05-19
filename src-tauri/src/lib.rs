@@ -65,6 +65,7 @@ pub fn run() {
             commands::database_commands::rollback_project_database_migrations,
             commands::database_commands::run_project_database_migrations,
             commands::docker_commands::get_docker_diagnostics,
+            commands::docker_commands::resolve_project_docker_image_pins,
             commands::docker_commands::generate_project_docker_compose,
             commands::docker_commands::get_project_docker_status,
             commands::docker_commands::start_project_docker_services,

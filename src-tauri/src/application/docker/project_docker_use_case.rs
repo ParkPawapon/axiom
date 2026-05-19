@@ -1,7 +1,7 @@
 use crate::domain::docker::docker_project::{
-    DockerComposeProfile, DockerDiagnosticsReport, DockerProjectActionResult,
-    DockerProjectComposePlan, DockerProjectLogReadResult, DockerProjectRuntimeStatus,
-    DockerProjectVolumeLifecycleResult,
+    DockerDiagnosticsReport, DockerImagePinResolutionReport, DockerProjectActionResult,
+    DockerProjectComposePlan, DockerProjectComposeRequest, DockerProjectLogReadResult,
+    DockerProjectRuntimeStatus, DockerProjectVolumeLifecycleResult,
 };
 use crate::domain::project::project::Project;
 use crate::domain::project::project_id::ProjectId;
@@ -20,12 +20,20 @@ pub fn get_docker_diagnostics(
 pub fn generate_project_docker_compose(
     project_repository: &dyn ProjectRepository,
     orchestrator: &dyn DockerProjectOrchestrator,
-    project_id: &str,
-    profiles: &[DockerComposeProfile],
+    request: &DockerProjectComposeRequest,
 ) -> AppResult<DockerProjectComposePlan> {
-    let project = resolve_project(project_repository, project_id)?;
+    let project = resolve_project(project_repository, &request.project_id.0)?;
 
-    orchestrator.generate_compose_plan(&project, profiles)
+    orchestrator.generate_compose_plan(&project, request)
+}
+
+pub fn resolve_project_docker_image_pins(
+    orchestrator: &dyn DockerProjectOrchestrator,
+    request: &DockerProjectComposeRequest,
+) -> AppResult<DockerImagePinResolutionReport> {
+    validate_project_id(&request.project_id.0)?;
+
+    orchestrator.resolve_image_pins(request)
 }
 
 pub fn get_project_docker_status(
@@ -41,12 +49,11 @@ pub fn get_project_docker_status(
 pub fn start_project_docker_services(
     project_repository: &dyn ProjectRepository,
     orchestrator: &dyn DockerProjectOrchestrator,
-    project_id: &str,
-    profiles: &[DockerComposeProfile],
+    request: &DockerProjectComposeRequest,
 ) -> AppResult<DockerProjectActionResult> {
-    let project = resolve_project(project_repository, project_id)?;
+    let project = resolve_project(project_repository, &request.project_id.0)?;
 
-    orchestrator.start_project(&project, profiles)
+    orchestrator.start_project(&project, request)
 }
 
 pub fn stop_project_docker_services(
@@ -62,23 +69,21 @@ pub fn stop_project_docker_services(
 pub fn restart_project_docker_services(
     project_repository: &dyn ProjectRepository,
     orchestrator: &dyn DockerProjectOrchestrator,
-    project_id: &str,
-    profiles: &[DockerComposeProfile],
+    request: &DockerProjectComposeRequest,
 ) -> AppResult<DockerProjectActionResult> {
-    let project = resolve_project(project_repository, project_id)?;
+    let project = resolve_project(project_repository, &request.project_id.0)?;
 
-    orchestrator.restart_project(&project, profiles)
+    orchestrator.restart_project(&project, request)
 }
 
 pub fn ensure_project_docker_volumes(
     project_repository: &dyn ProjectRepository,
     orchestrator: &dyn DockerProjectOrchestrator,
-    project_id: &str,
-    profiles: &[DockerComposeProfile],
+    request: &DockerProjectComposeRequest,
 ) -> AppResult<DockerProjectVolumeLifecycleResult> {
-    let project = resolve_project(project_repository, project_id)?;
+    let project = resolve_project(project_repository, &request.project_id.0)?;
 
-    orchestrator.ensure_project_volumes(&project, profiles)
+    orchestrator.ensure_project_volumes(&project, request)
 }
 
 pub fn remove_project_docker_volumes(
