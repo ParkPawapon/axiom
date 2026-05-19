@@ -77,6 +77,18 @@ export interface DatabaseBackupResult {
   readonly sizeBytes: number;
   readonly prunedBackupPaths: string[];
   readonly remoteCopyPaths: string[];
+  readonly remoteCopyReceipts: DatabaseBackupRemoteCopyReceipt[];
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupRemoteCopyReceipt {
+  readonly provider: DatabaseBackupRemoteDestinationProvider;
+  readonly artifactPath: string;
+  readonly remoteUri: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  readonly copiedAt: string;
+  readonly verified: boolean;
   readonly statusMessage: string;
 }
 
@@ -216,7 +228,18 @@ export interface DatabaseContinuousReplayRestoreResult {
   readonly targetTime?: string | null;
   readonly restore: DatabaseRestoreResult;
   readonly replayedLogPaths: string[];
+  readonly replaySegments: DatabaseReplaySegment[];
   readonly statusMessage: string;
+}
+
+export type DatabaseReplaySegmentKind = "mysqlBinlog" | "postgresWalSql" | "sql";
+
+export interface DatabaseReplaySegment {
+  readonly kind: DatabaseReplaySegmentKind;
+  readonly sourcePath: string;
+  readonly appliedSqlPath: string;
+  readonly sha256: string;
+  readonly appliedAt: string;
 }
 
 export interface DatabaseBackupKeyManagementStatus {
@@ -237,5 +260,12 @@ export interface DatabaseBackupTrustExportResult {
 export interface DatabaseBackupTrustImportResult {
   readonly trustBundlePath: string;
   readonly trustedSigningKeyFingerprint: string;
+  readonly statusMessage: string;
+}
+
+export interface DatabaseBackupArtifactTrustEnrollmentResult {
+  readonly backupPath: string;
+  readonly artifactSha256: string;
+  readonly trustedSigningKeyFingerprint?: string | null;
   readonly statusMessage: string;
 }
