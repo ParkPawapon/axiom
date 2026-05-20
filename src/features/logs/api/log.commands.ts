@@ -8,3 +8,17 @@ export function readProjectLogs(projectId: string, maxLines: number, query?: str
     query,
   });
 }
+
+export function streamProjectLogs(
+  projectId: string,
+  maxLines: number,
+  lastLineNumber?: number,
+  query?: string,
+) {
+  return invokeTauriCommand<ProjectLogReadResult>("stream_project_logs", {
+    lastLineNumber,
+    maxLines,
+    projectId,
+    query,
+  });
+}
