@@ -24,6 +24,7 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/material": "^9.0.1",
+    "@mui/material-pigment-css": "9.0.1",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "clsx": "^2.1.1",
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@rolldown/pluginutils": "^1.0.1",
     "@tailwindcss/postcss": "^4.3.0",
     "@tauri-apps/cli": "^2.8.4",
     "@types/node": "^25.8.0",
@@ -49,7 +51,7 @@
     "prettier": "^3.6.2",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.39.0",
+    "typescript-eslint": "8.59.4",
     "vite": "^8.0.13"
   }
 }

@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { CssBaseline, ThemeProvider } from "@mui/material";
 
 import { muiTheme } from "../../core/theme/mui-theme";
 
@@ -9,9 +8,8 @@ interface MuiProviderProps {
 
 export function MuiProvider({ children }: MuiProviderProps) {
   return (
-    <ThemeProvider theme={muiTheme}>
-      <CssBaseline />
+    <div data-mui-theme={muiTheme.name} style={{ colorScheme: muiTheme.colorScheme }}>
       {children}
-    </ThemeProvider>
+    </div>
   );
 }
