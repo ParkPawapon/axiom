@@ -10,11 +10,13 @@ use crate::infrastructure::docker::project_docker_orchestrator::ProjectDockerOrc
 use crate::infrastructure::logging::file_audit_logger::FileAuditLogger;
 use crate::infrastructure::logging::file_log_reader::FileLogReader;
 use crate::infrastructure::networking::hosts_file_adapter::HostsFileAdapter;
+use crate::infrastructure::networking::port_scanner_impl::PortScannerImpl;
 use crate::infrastructure::persistence::file_database_backup_destination_repository::FileDatabaseBackupDestinationRepository;
 use crate::infrastructure::persistence::file_database_backup_policy_repository::FileDatabaseBackupPolicyRepository;
 use crate::infrastructure::persistence::file_database_provisioning_repository::FileDatabaseProvisioningRepository;
 use crate::infrastructure::persistence::file_project_repository::FileProjectRepository;
 use crate::infrastructure::persistence::file_project_runtime_repository::FileProjectRuntimeRepository;
+use crate::infrastructure::persistence::local_config_repository::LocalConfigRepository;
 use crate::infrastructure::process::local_project_php_process_manager::LocalProjectPhpProcessManager;
 use crate::infrastructure::runtimes::package_manager_php_installer::PackageManagerPhpInstaller;
 use crate::infrastructure::runtimes::php_binary_detector::PhpBinaryDetector;
@@ -36,11 +38,13 @@ use crate::ports::log_reader::LogReader;
 use crate::ports::permission_manager::PermissionManager;
 use crate::ports::php_runtime_detector::PhpRuntimeDetector;
 use crate::ports::php_runtime_installer::PhpRuntimeInstaller;
+use crate::ports::port_scanner::PortScanner;
 use crate::ports::project_php_process_manager::ProjectPhpProcessManager;
 use crate::ports::project_repository::ProjectRepository;
 use crate::ports::project_runtime_repository::ProjectRuntimeRepository;
 use crate::ports::secure_storage::SecureStorage;
 use crate::ports::service_manager::ServiceManager;
+use crate::ports::settings_repository::SettingsRepository;
 use crate::shared::result::app_result::AppResult;
 
 #[derive(Clone)]
@@ -61,11 +65,13 @@ pub struct AppState {
     permission_manager: Arc<dyn PermissionManager>,
     php_runtime_detector: Arc<dyn PhpRuntimeDetector>,
     php_runtime_installer: Arc<dyn PhpRuntimeInstaller>,
+    port_scanner: Arc<dyn PortScanner>,
     project_php_process_manager: Arc<dyn ProjectPhpProcessManager>,
     project_repository: Arc<dyn ProjectRepository>,
     project_runtime_repository: Arc<dyn ProjectRuntimeRepository>,
     secure_storage: Arc<dyn SecureStorage>,
     service_manager: Arc<dyn ServiceManager>,
+    settings_repository: Arc<dyn SettingsRepository>,
 }
 
 impl AppState {
@@ -107,11 +113,13 @@ impl AppState {
             permission_manager: Arc::new(LocalPermissionManager::new()?),
             php_runtime_detector: Arc::new(PhpBinaryDetector::new()),
             php_runtime_installer: Arc::new(PackageManagerPhpInstaller::new()),
+            port_scanner: Arc::new(PortScannerImpl::new()),
             project_php_process_manager: Arc::new(LocalProjectPhpProcessManager::new()?),
             project_repository,
             project_runtime_repository,
             secure_storage,
             service_manager: Arc::new(LocalServiceManager::new()),
+            settings_repository: Arc::new(LocalConfigRepository::new()?),
         })
     }
 
@@ -181,6 +189,10 @@ impl AppState {
         self.project_php_process_manager.as_ref()
     }
 
+    pub fn port_scanner(&self) -> &dyn PortScanner {
+        self.port_scanner.as_ref()
+    }
+
     pub fn project_repository(&self) -> &dyn ProjectRepository {
         self.project_repository.as_ref()
     }
@@ -195,6 +207,10 @@ impl AppState {
 
     pub fn service_manager(&self) -> &dyn ServiceManager {
         self.service_manager.as_ref()
+    }
+
+    pub fn settings_repository(&self) -> &dyn SettingsRepository {
+        self.settings_repository.as_ref()
     }
 }
 
