@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::project::project_id::ProjectId;
+use crate::domain::service::service::Service;
 
 use super::database_type::DatabaseType;
 
@@ -434,5 +435,17 @@ pub struct DatabaseBackupArtifactTrustEnrollmentResult {
     pub backup_path: String,
     pub artifact_sha256: String,
     pub trusted_signing_key_fingerprint: Option<String>,
+    pub status_message: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDatabaseStatus {
+    pub project_id: ProjectId,
+    pub database_type: DatabaseType,
+    pub profile: Option<ProjectDatabaseProfile>,
+    pub service: Option<Service>,
+    pub provisioned: bool,
+    pub checked_at: DateTime<Utc>,
     pub status_message: String,
 }
