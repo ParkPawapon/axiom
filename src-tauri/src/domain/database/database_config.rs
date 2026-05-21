@@ -375,6 +375,7 @@ pub struct DatabaseContinuousReplayRestoreResult {
 #[serde(rename_all = "camelCase")]
 pub enum DatabaseReplaySegmentKind {
     MysqlBinlog,
+    PostgresPhysicalWal,
     PostgresWalSql,
     Sql,
 }
@@ -409,8 +410,21 @@ pub struct DatabaseBackupTrustBundle {
     #[serde(default)]
     pub artifact_sha256: Option<String>,
     #[serde(default)]
+    pub encrypted_recovery_key: Option<DatabaseBackupEncryptedRecoveryKey>,
+    #[serde(default)]
     pub source_machine: Option<String>,
     pub exported_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseBackupEncryptedRecoveryKey {
+    pub algorithm: String,
+    pub kdf: String,
+    pub iterations: u32,
+    pub salt: String,
+    pub nonce: String,
+    pub ciphertext: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
