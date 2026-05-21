@@ -62,7 +62,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 
 - Project-based PHP environment configuration
 - Project process switching and runtime supervision
-- Registry signature verification for Docker images
+- Optional cosign signature verification for Docker images
 - Port conflict detection
 - Environment profile management
 - Logs viewer and service health status
@@ -130,6 +130,10 @@ releases fail closed when required macOS signing/notarization or Windows signing
 inputs are missing. Dry-run manual releases can build unsigned packages while
 still generating release manifests with SHA-256 hashes.
 
-## Not Implemented Yet
+## Current Hardening Scope
 
-The backup/restore layer now supports managed artifacts, file picker restore, scheduled policies, OS scheduler installation, mounted and cloud CLI remote destinations with integrity receipts, point-in-time snapshot restore, replay restore with MySQL binlog and PostgreSQL WAL-derived SQL segment metadata, expanded rollback SQL generation, trust bundle and artifact-hash enrollment, retention, compression, encryption, HMAC signing, and AWS/GCP KMS-wrapped data-key envelopes. The Docker layer now supports per-project Compose plans, PHP/MySQL/PostgreSQL/Redis/Mailpit/reverse proxy profiles, project volume lifecycle, digest-pinned image trust gates, registry metadata inspection, user-facing image digest resolution, per-container resource limits, Docker Desktop diagnostics, and sanitized Docker log reads. It does not yet provide native cloud SDK uploads without provider CLIs, PostgreSQL physical WAL server restore orchestration, semantic rollback generation for complex destructive SQL, cross-machine decryption without shared external key material or configured KMS access, registry signature verification, private registry authentication UX, or broad service templates for queues/search/object-storage workers.
+The backup/restore layer supports managed artifacts, file picker restore, scheduled policies, OS scheduler installation, mounted destinations, native S3/R2/GCS uploads with CLI fallback, SFTP CLI destinations, integrity receipts, point-in-time snapshot restore, replay restore with SQL, MySQL binlog, PostgreSQL WAL-derived SQL, PostgreSQL physical WAL restore manifests, conservative rollback generation, explicit rollback annotations for destructive SQL, trust bundle and artifact-hash enrollment, passphrase-protected cross-machine recovery key export/import, retention, compression, encryption, HMAC signing, and AWS/GCP KMS-wrapped data-key envelopes.
+
+The Docker layer supports per-project Compose plans, PHP/MySQL/PostgreSQL/Redis/Mailpit/reverse proxy/queue/search/object-storage/worker profiles, project volume lifecycle, digest-pinned image trust gates, registry metadata inspection, optional cosign verification, private registry auth through validated `DOCKER_AUTH_CONFIG`, user-facing image digest resolution, per-container resource limits, Docker Desktop diagnostics, and sanitized Docker log reads.
+
+Still intentionally conservative: destructive migration rollback is not guessed without explicit annotations, real Docker runtime tests remain opt-in, and external KMS/provider credentials are supplied by environment or platform secure storage rather than frontend state.
