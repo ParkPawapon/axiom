@@ -23,6 +23,7 @@ import type {
   DatabaseProvisioningResult,
   DatabaseRestoreResult,
   DatabaseType,
+  ProjectDatabaseStatus,
   ProjectDatabaseProfile,
   ScheduledDatabaseBackupRunResult,
 } from "../types/database.types";
@@ -37,6 +38,21 @@ export function provisionProjectDatabase(projectId: string, databaseType: Databa
   return invokeTauriCommand<DatabaseProvisioningResult>("provision_project_database", {
     projectId,
     databaseType,
+  });
+}
+
+export function configureMysql(projectId: string) {
+  return invokeTauriCommand<DatabaseProvisioningResult>("configure_mysql", { projectId });
+}
+
+export function configurePostgres(projectId: string) {
+  return invokeTauriCommand<DatabaseProvisioningResult>("configure_postgres", { projectId });
+}
+
+export function getDatabaseStatus(projectId: string, databaseType: DatabaseType) {
+  return invokeTauriCommand<ProjectDatabaseStatus>("get_database_status", {
+    databaseType,
+    projectId,
   });
 }
 

@@ -45,6 +45,9 @@ pub fn run() {
             commands::project_commands::restart_project_php_processes,
             commands::database_commands::list_project_database_profiles,
             commands::database_commands::provision_project_database,
+            commands::database_commands::configure_mysql,
+            commands::database_commands::configure_postgres,
+            commands::database_commands::get_database_status,
             commands::database_commands::backup_project_database,
             commands::database_commands::list_database_backup_destinations,
             commands::database_commands::list_database_backup_policies,
@@ -76,6 +79,9 @@ pub fn run() {
             commands::docker_commands::remove_project_docker_volumes,
             commands::docker_commands::read_project_docker_logs,
             commands::log_commands::read_project_logs,
+            commands::log_commands::stream_project_logs,
+            commands::runtime_commands::detect_php_runtimes,
+            commands::runtime_commands::validate_runtime,
             commands::security_commands::get_security_status,
             commands::security_commands::update_hosts_file,
             commands::security_commands::generate_local_certificate,
@@ -88,6 +94,11 @@ pub fn run() {
             commands::service_commands::start_service,
             commands::service_commands::stop_service,
             commands::service_commands::restart_service,
+            commands::settings_commands::read_settings,
+            commands::settings_commands::update_settings,
+            commands::system_commands::check_port,
+            commands::system_commands::check_docker,
+            commands::system_commands::check_permissions,
         ]);
 
     if let Err(error) = builder.run(tauri::generate_context!()) {

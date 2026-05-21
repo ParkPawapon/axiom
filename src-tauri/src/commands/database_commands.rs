@@ -1,12 +1,15 @@
 use tauri::State;
 
 use crate::application::databases::backup_project_database_use_case;
+use crate::application::databases::configure_mysql_use_case;
+use crate::application::databases::configure_postgres_use_case;
 use crate::application::databases::create_project_database_migration_use_case;
 use crate::application::databases::enroll_database_backup_artifact_trust_use_case;
 use crate::application::databases::export_database_backup_trust_bundle_use_case;
 use crate::application::databases::generate_project_database_migration_rollback_use_case;
 use crate::application::databases::get_database_backup_key_management_status_use_case;
 use crate::application::databases::get_database_backup_scheduler_status_use_case;
+use crate::application::databases::get_database_status_use_case;
 use crate::application::databases::import_database_backup_trust_bundle_use_case;
 use crate::application::databases::install_database_backup_scheduler_use_case;
 use crate::application::databases::list_database_backup_destinations_use_case;
@@ -33,7 +36,8 @@ use crate::domain::database::database_config::{
     DatabaseContinuousReplayRestoreResult, DatabaseMigrationFile,
     DatabaseMigrationRollbackGenerationResult, DatabaseMigrationRollbackResult,
     DatabaseMigrationRunResult, DatabasePointInTimeRestoreResult, DatabaseProvisioningResult,
-    DatabaseRestoreResult, ProjectDatabaseProfile, ScheduledDatabaseBackupRunResult,
+    DatabaseRestoreResult, ProjectDatabaseProfile, ProjectDatabaseStatus,
+    ScheduledDatabaseBackupRunResult,
 };
 use crate::shared::error::command_error_mapper::{map_command_error, CommandErrorPayload};
 
@@ -70,6 +74,63 @@ pub fn provision_project_database(
     )
     .map_err(|error| {
         tracing::warn!(?error, "database provisioning command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn configure_mysql(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<DatabaseProvisioningResult, CommandErrorPayload> {
+    configure_mysql_use_case::configure_mysql(
+        state.project_repository(),
+        state.database_provisioning_repository(),
+        state.database_dependency_manager(),
+        state.database_provisioner(),
+        state.service_manager(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "MySQL configure command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn configure_postgres(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<DatabaseProvisioningResult, CommandErrorPayload> {
+    configure_postgres_use_case::configure_postgres(
+        state.project_repository(),
+        state.database_provisioning_repository(),
+        state.database_dependency_manager(),
+        state.database_provisioner(),
+        state.service_manager(),
+        &project_id,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "PostgreSQL configure command failed");
+        map_command_error(&error)
+    })
+}
+
+#[tauri::command]
+pub fn get_database_status(
+    state: State<'_, AppState>,
+    project_id: String,
+    database_type: String,
+) -> Result<ProjectDatabaseStatus, CommandErrorPayload> {
+    get_database_status_use_case::get_database_status(
+        state.project_repository(),
+        state.database_provisioning_repository(),
+        state.service_manager(),
+        &project_id,
+        &database_type,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, "database status command failed");
         map_command_error(&error)
     })
 }

@@ -34,6 +34,26 @@ export interface DatabaseProvisioningResult {
   readonly statusMessage: string;
 }
 
+export interface ProjectDatabaseStatus {
+  readonly projectId: string;
+  readonly databaseType: DatabaseType;
+  readonly profile?: ProjectDatabaseProfile | null;
+  readonly service?: {
+    readonly id: string;
+    readonly name: string;
+    readonly serviceType: string;
+    readonly status: string;
+    readonly description: string;
+    readonly statusMessage: string;
+    readonly canStart: boolean;
+    readonly canStop: boolean;
+    readonly canRestart: boolean;
+  } | null;
+  readonly provisioned: boolean;
+  readonly checkedAt: string;
+  readonly statusMessage: string;
+}
+
 export interface ManagedDatabasePackage {
   readonly packageName: string;
   readonly alreadyInstalled: boolean;
