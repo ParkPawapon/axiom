@@ -1,10 +1,14 @@
 export type DockerComposeProfile =
   | "mailpit"
   | "mysql"
+  | "objectStorage"
   | "php"
   | "postgresql"
+  | "queue"
   | "redis"
-  | "reverseProxy";
+  | "reverseProxy"
+  | "search"
+  | "worker";
 
 export interface DockerProjectImageOverride {
   readonly profile: DockerComposeProfile;
@@ -24,6 +28,8 @@ export interface DockerRegistryTrustMetadata {
   readonly mediaType: string;
   readonly platformCount: number;
   readonly allowedRegistry: boolean;
+  readonly signatureVerified: boolean;
+  readonly signatureRequired: boolean;
   readonly statusMessage: string;
 }
 
@@ -47,6 +53,8 @@ export interface DockerImageTrustEvaluation {
   readonly pinnedByDigest: boolean;
   readonly registryAllowed: boolean;
   readonly metadataVerified: boolean;
+  readonly signatureVerified: boolean;
+  readonly signatureRequired: boolean;
   readonly allowed: boolean;
   readonly metadata?: DockerRegistryTrustMetadata;
   readonly statusMessage: string;
@@ -137,6 +145,10 @@ export interface DockerDiagnosticsReport {
   readonly engineRunning: boolean;
   readonly composeAvailable: boolean;
   readonly dockerContext?: string;
+  readonly privateRegistryAuthConfigured: boolean;
+  readonly privateRegistryAuthSource?: string;
+  readonly signatureVerifierAvailable: boolean;
+  readonly signatureVerificationRequired: boolean;
   readonly checks: DockerDiagnosticCheck[];
   readonly statusMessage: string;
 }

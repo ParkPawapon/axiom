@@ -67,6 +67,21 @@ const PROFILE_OPTIONS: ReadonlyArray<{
     description: "Project-specific Redis cache service and named volume",
   },
   {
+    label: "Queue",
+    profile: "queue",
+    description: "Project-specific RabbitMQ queue and management UI",
+  },
+  {
+    label: "Search",
+    profile: "search",
+    description: "Project-specific OpenSearch service and named volume",
+  },
+  {
+    label: "Object storage",
+    profile: "objectStorage",
+    description: "Project-specific MinIO object storage and console",
+  },
+  {
     label: "Mailpit",
     profile: "mailpit",
     description: "Project-specific SMTP capture and web mailbox service",
@@ -76,16 +91,25 @@ const PROFILE_OPTIONS: ReadonlyArray<{
     profile: "reverseProxy",
     description: "Project-specific reverse proxy in front of PHP",
   },
+  {
+    label: "Worker",
+    profile: "worker",
+    description: "Project-specific PHP worker process profile",
+  },
 ];
 
 const DEFAULT_PROFILES = new Set<DockerComposeProfile>(["php"]);
 const DEFAULT_IMAGE_OVERRIDES: Record<DockerComposeProfile, string> = {
   mailpit: "axllent/mailpit:v1.22",
   mysql: "mysql:8.4",
+  objectStorage: "minio/minio:RELEASE.2025-04-22T22-12-26Z",
   php: "php:8.4-cli",
   postgresql: "postgres:17",
+  queue: "rabbitmq:3.13-management",
   redis: "redis:7-alpine",
   reverseProxy: "nginx:1.27-alpine",
+  search: "opensearchproject/opensearch:2",
+  worker: "php:8.4-cli",
 };
 
 function getErrorMessage(error: unknown) {
@@ -122,10 +146,14 @@ export function ProjectDockerOrchestrationPanel() {
   const [profileState, setProfileState] = useState<Record<DockerComposeProfile, boolean>>({
     mailpit: false,
     mysql: false,
+    objectStorage: false,
     php: true,
     postgresql: false,
+    queue: false,
     redis: false,
     reverseProxy: false,
+    search: false,
+    worker: false,
   });
   const [imageState, setImageState] =
     useState<Record<DockerComposeProfile, string>>(DEFAULT_IMAGE_OVERRIDES);
@@ -454,7 +482,8 @@ export function ProjectDockerOrchestrationPanel() {
             <p className="text-xs font-semibold uppercase tracking-wide">Image pinning</p>
             <p className="text-xs text-voicebox-secondary">
               Start is blocked until every selected image is pinned with a sha256 digest and
-              verified against allowed registry metadata.
+              verified against allowed registry metadata. Optional cosign verification is enforced
+              when configured by the backend environment.
             </p>
             {PROFILE_OPTIONS.filter((option) => profiles.includes(option.profile)).map((option) => (
               <label
@@ -560,6 +589,19 @@ export function ProjectDockerOrchestrationPanel() {
               <p className="font-mono text-xs uppercase text-voicebox-secondary">
                 {diagnostics.statusMessage}
               </p>
+              <div className="mt-2 grid gap-1 font-mono text-[11px] uppercase text-voicebox-secondary">
+                <p>
+                  private registry auth{" "}
+                  {diagnostics.privateRegistryAuthConfigured
+                    ? `configured via ${diagnostics.privateRegistryAuthSource ?? "environment"}`
+                    : "not configured"}
+                </p>
+                <p>
+                  signature verifier{" "}
+                  {diagnostics.signatureVerifierAvailable ? "available" : "not available"} /{" "}
+                  {diagnostics.signatureVerificationRequired ? "required" : "optional"}
+                </p>
+              </div>
               <div className="mt-3 grid gap-2">
                 {diagnostics.checks.map((check) => (
                   <div className="flex items-start justify-between gap-3 text-sm" key={check.name}>
@@ -619,7 +661,12 @@ export function ProjectDockerOrchestrationPanel() {
                     </p>
                     <p className="mt-1 font-mono text-voicebox-secondary">
                       registry {trust.registryAllowed ? "allowed" : "blocked"} / metadata{" "}
-                      {trust.metadataVerified ? "verified" : "not verified"}
+                      {trust.metadataVerified ? "verified" : "not verified"} / signature{" "}
+                      {trust.signatureRequired
+                        ? trust.signatureVerified
+                          ? "verified"
+                          : "required"
+                        : "optional"}
                     </p>
                     {trust.metadata ? (
                       <p className="break-all font-mono text-voicebox-secondary">

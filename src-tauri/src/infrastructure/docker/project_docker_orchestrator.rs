@@ -22,8 +22,8 @@ use crate::domain::project::project::Project;
 use crate::domain::security::command_policy::{CommandPolicy, ProcessCommand, ProcessOutput};
 use crate::infrastructure::docker::docker_compose_generator::{
     default_image, image_is_digest_pinned, mysql_volume_name, normalize_profiles,
-    postgres_volume_name, redis_volume_name, DockerComposeGenerationInput, DockerComposeGenerator,
-    DockerProjectPorts,
+    object_storage_volume_name, postgres_volume_name, queue_volume_name, redis_volume_name,
+    search_volume_name, DockerComposeGenerationInput, DockerComposeGenerator, DockerProjectPorts,
 };
 use crate::infrastructure::process::command_runner::CommandRunner;
 use crate::infrastructure::services::adapters::executable_resolver::ExecutableResolver;
@@ -38,9 +38,11 @@ const DOCKER_TIMEOUT: Duration = Duration::from_secs(8);
 const COMPOSE_TIMEOUT: Duration = Duration::from_secs(120);
 const DOCKER_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const IMAGE_INSPECT_TIMEOUT: Duration = Duration::from_secs(90);
+const SIGNATURE_VERIFY_TIMEOUT: Duration = Duration::from_secs(90);
 const DOCKER_SECRET_NAMESPACE: &str = "docker";
 const LABEL_PROJECT_ID: &str = "dev.axiomphp.project-id";
 const DEFAULT_ALLOWED_REGISTRIES: &[&str] = &["docker.io", "registry-1.docker.io"];
+const DOCKER_AUTH_CONFIG_KEYS: &[&str] = &["AXIOM_DOCKER_AUTH_CONFIG", "DOCKER_AUTH_CONFIG"];
 
 #[derive(Clone)]
 pub struct ProjectDockerOrchestrator {
@@ -55,6 +57,13 @@ struct ProjectDockerPaths {
     compose_file: PathBuf,
     env_file: PathBuf,
     reverse_proxy_config_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DockerSignatureVerification {
+    verified: bool,
+    required: bool,
+    status_message: String,
 }
 
 impl ProjectDockerOrchestrator {
@@ -114,11 +123,15 @@ impl ProjectDockerOrchestrator {
                 .with_max_output_bytes(DOCKER_OUTPUT_LIMIT_BYTES),
         );
 
-        runner.execute(
-            ProcessCommand::new(docker_path.to_string_lossy().into_owned())
-                .args(command_args)
-                .timeout(timeout),
-        )
+        let mut process_command = ProcessCommand::new(docker_path.to_string_lossy().into_owned())
+            .args(command_args)
+            .timeout(timeout);
+
+        if let Ok(Some((_source, auth_config))) = configured_docker_auth_config() {
+            process_command = process_command.env("DOCKER_AUTH_CONFIG", auth_config);
+        }
+
+        runner.execute(process_command)
     }
 
     fn docker_available(&self) -> bool {
@@ -266,6 +279,22 @@ impl ProjectDockerOrchestrator {
             "AXIOM_REVERSE_PROXY_HOST_PORT={}\n",
             ports.reverse_proxy_host_port
         ));
+        env_file.push_str(&format!(
+            "AXIOM_QUEUE_MANAGEMENT_HOST_PORT={}\n",
+            ports.rabbitmq_management_host_port
+        ));
+        env_file.push_str(&format!(
+            "AXIOM_SEARCH_HOST_PORT={}\n",
+            ports.opensearch_host_port
+        ));
+        env_file.push_str(&format!(
+            "AXIOM_OBJECT_STORAGE_API_HOST_PORT={}\n",
+            ports.minio_api_host_port
+        ));
+        env_file.push_str(&format!(
+            "AXIOM_OBJECT_STORAGE_CONSOLE_HOST_PORT={}\n",
+            ports.minio_console_host_port
+        ));
 
         if profiles.contains(&DockerComposeProfile::Mysql) {
             env_file.push_str(&format!(
@@ -282,6 +311,21 @@ impl ProjectDockerOrchestrator {
             env_file.push_str(&format!(
                 "AXIOM_POSTGRES_PASSWORD={}\n",
                 self.secret(project, "postgres-password")?
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::Search) {
+            env_file.push_str(&format!(
+                "AXIOM_SEARCH_ADMIN_PASSWORD={}\n",
+                self.secret(project, "search-admin-password")?
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::ObjectStorage) {
+            env_file.push_str("AXIOM_OBJECT_STORAGE_ROOT_USER=axiomphp\n");
+            env_file.push_str(&format!(
+                "AXIOM_OBJECT_STORAGE_ROOT_PASSWORD={}\n",
+                self.secret(project, "object-storage-root-password")?
             ));
         }
 
@@ -341,6 +385,19 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
         let mut checks = Vec::new();
         let docker_path = resolve_docker();
         let cli_found = docker_path.is_ok();
+        let signature_verification_required = docker_signature_required();
+        let signature_verifier = resolve_cosign();
+        let signature_verifier_available = signature_verifier.is_ok();
+        let auth_config = configured_docker_auth_config();
+        let private_registry_auth_configured = auth_config
+            .as_ref()
+            .ok()
+            .and_then(|value| value.as_ref())
+            .is_some();
+        let private_registry_auth_source = auth_config
+            .as_ref()
+            .ok()
+            .and_then(|value| value.as_ref().map(|(source, _value)| source.clone()));
 
         checks.push(DockerDiagnosticCheck {
             name: "Docker CLI".to_string(),
@@ -357,6 +414,10 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
                 engine_running: false,
                 compose_available: false,
                 docker_context: None,
+                private_registry_auth_configured,
+                private_registry_auth_source,
+                signature_verifier_available,
+                signature_verification_required,
                 checks,
                 status_message: "Docker CLI is not available. Install or open Docker Desktop before running project containers.".to_string(),
             });
@@ -411,6 +472,43 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
                 .unwrap_or_else(|| "Docker context could not be read.".to_string()),
         });
 
+        checks.push(DockerDiagnosticCheck {
+            name: "Private registry auth".to_string(),
+            healthy: auth_config.is_ok(),
+            status_message: match &auth_config {
+                Ok(Some((source, _value))) => {
+                    format!("{source} is configured and will be passed to Docker as DOCKER_AUTH_CONFIG.")
+                }
+                Ok(None) => {
+                    "No private registry auth config is configured. Public registries remain supported."
+                        .to_string()
+                }
+                Err(error) => format!("Docker registry auth config is invalid: {error}"),
+            },
+        });
+
+        checks.push(DockerDiagnosticCheck {
+            name: "Docker signature verifier".to_string(),
+            healthy: !signature_verification_required || signature_verifier_available,
+            status_message: match (&signature_verifier, signature_verification_required) {
+                (Ok(path), true) => format!(
+                    "Cosign is required and resolved at {}.",
+                    path.to_string_lossy()
+                ),
+                (Ok(path), false) => format!(
+                    "Cosign is available at {}; signature verification can be required with AXIOM_DOCKER_COSIGN_REQUIRED=true.",
+                    path.to_string_lossy()
+                ),
+                (Err(error), true) => {
+                    format!("Cosign signature verification is required but unavailable: {error}")
+                }
+                (Err(_error), false) => {
+                    "Cosign is not configured. Digest and registry metadata checks remain enforced."
+                        .to_string()
+                }
+            },
+        });
+
         let status_message = if engine_running && compose_available {
             "Docker Desktop runtime diagnostics are ready for project orchestration.".to_string()
         } else {
@@ -422,6 +520,10 @@ impl DockerProjectOrchestrator for ProjectDockerOrchestrator {
             engine_running,
             compose_available,
             docker_context,
+            private_registry_auth_configured,
+            private_registry_auth_source,
+            signature_verifier_available,
+            signature_verification_required,
             checks,
             status_message,
         })
@@ -724,6 +826,8 @@ impl ProjectDockerOrchestrator {
         profiles: &[DockerComposeProfile],
         images: &BTreeMap<DockerComposeProfile, String>,
     ) -> Vec<DockerImageTrustEvaluation> {
+        let signature_required = docker_signature_required();
+
         profiles
             .iter()
             .map(|profile| {
@@ -731,20 +835,28 @@ impl ProjectDockerOrchestrator {
                 let pinned_by_digest = image_is_digest_pinned(image);
 
                 match self.inspect_registry_metadata(image) {
-                    Ok(metadata) => {
+                    Ok(mut metadata) => {
                         let digest_matches = image_digest(image)
                             .map(|digest| digest == metadata.digest)
                             .unwrap_or(false);
-                        let allowed =
-                            pinned_by_digest && digest_matches && metadata.allowed_registry;
+                        let signature = self.verify_image_signature(image, signature_required);
+                        metadata.signature_verified = signature.verified;
+                        metadata.signature_required = signature.required;
+                        let signature_allowed = !signature.required || signature.verified;
+                        let allowed = pinned_by_digest
+                            && digest_matches
+                            && metadata.allowed_registry
+                            && signature_allowed;
                         let status_message = if allowed {
-                            "Image reference is digest-pinned and verified against registry metadata."
+                            "Image reference is digest-pinned and verified against registry metadata and signature policy."
                                 .to_string()
                         } else if !pinned_by_digest {
                             "Image reference is resolved from registry metadata but must be pinned before start."
                                 .to_string()
                         } else if !metadata.allowed_registry {
                             "Image registry is not allowed by Docker trust policy.".to_string()
+                        } else if !signature_allowed {
+                            signature.status_message.clone()
                         } else {
                             "Image digest did not match registry metadata.".to_string()
                         };
@@ -755,6 +867,8 @@ impl ProjectDockerOrchestrator {
                             pinned_by_digest,
                             registry_allowed: metadata.allowed_registry,
                             metadata_verified: digest_matches,
+                            signature_verified: signature.verified,
+                            signature_required: signature.required,
                             allowed,
                             metadata: Some(metadata),
                             status_message,
@@ -766,6 +880,8 @@ impl ProjectDockerOrchestrator {
                         pinned_by_digest,
                         registry_allowed: image_registry_allowed(image),
                         metadata_verified: false,
+                        signature_verified: false,
+                        signature_required,
                         allowed: false,
                         metadata: None,
                         status_message: format!(
@@ -775,6 +891,76 @@ impl ProjectDockerOrchestrator {
                 }
             })
             .collect()
+    }
+
+    fn verify_image_signature(&self, image: &str, required: bool) -> DockerSignatureVerification {
+        if !required {
+            return DockerSignatureVerification {
+                verified: false,
+                required,
+                status_message:
+                    "Docker image signature verification is optional for this environment."
+                        .to_string(),
+            };
+        }
+
+        let cosign_path = match resolve_cosign() {
+            Ok(path) => path,
+            Err(error) => {
+                return DockerSignatureVerification {
+                    verified: false,
+                    required,
+                    status_message: format!(
+                        "Docker image signature verification is required but cosign is unavailable: {error}"
+                    ),
+                };
+            }
+        };
+        let identity_regexp =
+            docker_signature_regexp("AXIOM_DOCKER_COSIGN_CERTIFICATE_IDENTITY_REGEXP", ".*");
+        let issuer_regexp = docker_signature_regexp("AXIOM_DOCKER_COSIGN_OIDC_ISSUER_REGEXP", ".*");
+        let runner = CommandRunner::new(
+            CommandPolicy::deny_all()
+                .allow_program_paths([cosign_path.clone()])
+                .with_default_timeout(SIGNATURE_VERIFY_TIMEOUT)
+                .with_max_output_bytes(DOCKER_OUTPUT_LIMIT_BYTES),
+        );
+        let output = runner.execute(
+            ProcessCommand::new(cosign_path.to_string_lossy().into_owned())
+                .args([
+                    "verify".to_string(),
+                    "--certificate-identity-regexp".to_string(),
+                    identity_regexp,
+                    "--certificate-oidc-issuer-regexp".to_string(),
+                    issuer_regexp,
+                    image.to_string(),
+                ])
+                .timeout(SIGNATURE_VERIFY_TIMEOUT),
+        );
+
+        match output {
+            Ok(output) if output.exit_code == Some(0) && !output.timed_out => {
+                DockerSignatureVerification {
+                    verified: true,
+                    required,
+                    status_message: "Docker image signature was verified by cosign policy."
+                        .to_string(),
+                }
+            }
+            Ok(output) => DockerSignatureVerification {
+                verified: false,
+                required,
+                status_message: format!(
+                    "Docker image signature verification failed. {}",
+                    summarize_output(&output)
+                ),
+            },
+            Err(error) => DockerSignatureVerification {
+                verified: false,
+                required,
+                status_message: format!("Docker image signature verification failed: {error}"),
+            },
+        }
     }
 
     fn inspect_registry_metadata(&self, image: &str) -> AppResult<DockerRegistryTrustMetadata> {
@@ -815,6 +1001,10 @@ fn configured_images(
 ) -> AppResult<BTreeMap<DockerComposeProfile, String>> {
     let mut images = [
         (DockerComposeProfile::Mailpit, "AXIOM_DOCKER_MAILPIT_IMAGE"),
+        (
+            DockerComposeProfile::ObjectStorage,
+            "AXIOM_DOCKER_OBJECT_STORAGE_IMAGE",
+        ),
         (DockerComposeProfile::Php, "AXIOM_DOCKER_PHP_IMAGE"),
         (DockerComposeProfile::Mysql, "AXIOM_DOCKER_MYSQL_IMAGE"),
         (
@@ -822,10 +1012,13 @@ fn configured_images(
             "AXIOM_DOCKER_POSTGRES_IMAGE",
         ),
         (DockerComposeProfile::Redis, "AXIOM_DOCKER_REDIS_IMAGE"),
+        (DockerComposeProfile::Queue, "AXIOM_DOCKER_QUEUE_IMAGE"),
         (
             DockerComposeProfile::ReverseProxy,
             "AXIOM_DOCKER_REVERSE_PROXY_IMAGE",
         ),
+        (DockerComposeProfile::Search, "AXIOM_DOCKER_SEARCH_IMAGE"),
+        (DockerComposeProfile::Worker, "AXIOM_DOCKER_WORKER_IMAGE"),
     ]
     .into_iter()
     .filter_map(|(profile, key)| {
@@ -874,6 +1067,33 @@ fn planned_volumes(
         volumes.push(DockerProjectVolumePlan {
             name: redis_volume_name(&project.id.0),
             service_name: "redis".to_string(),
+            mount_path: "/data".to_string(),
+            created: false,
+        });
+    }
+
+    if profiles.contains(&DockerComposeProfile::Queue) {
+        volumes.push(DockerProjectVolumePlan {
+            name: queue_volume_name(&project.id.0),
+            service_name: "queue".to_string(),
+            mount_path: "/var/lib/rabbitmq".to_string(),
+            created: false,
+        });
+    }
+
+    if profiles.contains(&DockerComposeProfile::Search) {
+        volumes.push(DockerProjectVolumePlan {
+            name: search_volume_name(&project.id.0),
+            service_name: "search".to_string(),
+            mount_path: "/usr/share/opensearch/data".to_string(),
+            created: false,
+        });
+    }
+
+    if profiles.contains(&DockerComposeProfile::ObjectStorage) {
+        volumes.push(DockerProjectVolumePlan {
+            name: object_storage_volume_name(&project.id.0),
+            service_name: "object-storage".to_string(),
             mount_path: "/data".to_string(),
             created: false,
         });
@@ -933,7 +1153,12 @@ fn deterministic_ports(project_id: &str) -> DockerProjectPorts {
         redis_host_port: 63_790 + hash,
         mailpit_smtp_host_port: 10_250 + hash,
         mailpit_web_host_port: 18_250 + hash,
+        minio_api_host_port: 19_000 + hash,
+        minio_console_host_port: 19_100 + hash,
+        opensearch_host_port: 19_200 + hash,
         postgres_host_port: 54_320 + hash,
+        rabbitmq_amqp_host_port: 26_720 + hash,
+        rabbitmq_management_host_port: 16_720 + hash,
         reverse_proxy_host_port: 18_080 + hash,
     }
 }
@@ -1001,6 +1226,76 @@ fn resolve_docker() -> AppResult<PathBuf> {
         .ok_or_else(|| {
             AppError::NotFound("Docker CLI executable was not found on PATH".to_string())
         })
+}
+
+fn resolve_cosign() -> AppResult<PathBuf> {
+    ExecutableResolver::from_env()
+        .resolve("cosign")
+        .ok_or_else(|| AppError::NotFound("Cosign executable was not found on PATH".to_string()))
+}
+
+fn docker_signature_required() -> bool {
+    env_bool("AXIOM_DOCKER_COSIGN_REQUIRED")
+}
+
+fn docker_signature_regexp(key: &str, fallback: &str) -> String {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 512
+                && !value.as_bytes().contains(&0)
+                && !value.contains('\n')
+                && !value.contains('\r')
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn env_bool(key: &str) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn configured_docker_auth_config() -> AppResult<Option<(String, String)>> {
+    let Some((source, value)) = DOCKER_AUTH_CONFIG_KEYS
+        .iter()
+        .find_map(|key| env::var(key).ok().map(|value| ((*key).to_string(), value)))
+        .map(|(source, value)| (source, value.trim().to_string()))
+        .filter(|(_source, value)| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if value.len() > 8_192 || value.as_bytes().contains(&0) {
+        return Err(AppError::Validation(
+            "Docker registry auth config is too large or contains unsupported characters"
+                .to_string(),
+        ));
+    }
+
+    let value = serde_json::from_str::<Value>(&value).map_err(|error| {
+        AppError::Validation(format!(
+            "Docker registry auth config must be a JSON object: {error}"
+        ))
+    })?;
+
+    if !value.is_object() {
+        return Err(AppError::Validation(
+            "Docker registry auth config must be a JSON object".to_string(),
+        ));
+    }
+
+    Ok(Some((
+        source,
+        serde_json::to_string(&value).map_err(|error| {
+            AppError::Configuration(format!(
+                "failed to normalize Docker registry auth config: {error}"
+            ))
+        })?,
+    )))
 }
 
 fn validate_image_reference(image: &str) -> AppResult<()> {
@@ -1132,6 +1427,8 @@ fn metadata_from_parts(
         media_type,
         platform_count,
         allowed_registry,
+        signature_verified: false,
+        signature_required: docker_signature_required(),
         status_message,
     }
 }
@@ -1396,6 +1693,12 @@ fn volume_service_name(volume_name: &str) -> String {
         "postgres".to_string()
     } else if volume_name.contains("_redis_") {
         "redis".to_string()
+    } else if volume_name.contains("_queue_") {
+        "queue".to_string()
+    } else if volume_name.contains("_search_") {
+        "search".to_string()
+    } else if volume_name.contains("_object_storage_") {
+        "object-storage".to_string()
     } else {
         "unknown".to_string()
     }
@@ -1407,6 +1710,12 @@ fn volume_mount_path(volume_name: &str) -> String {
     } else if volume_name.contains("_postgres_") {
         "/var/lib/postgresql/data".to_string()
     } else if volume_name.contains("_redis_") {
+        "/data".to_string()
+    } else if volume_name.contains("_queue_") {
+        "/var/lib/rabbitmq".to_string()
+    } else if volume_name.contains("_search_") {
+        "/usr/share/opensearch/data".to_string()
+    } else if volume_name.contains("_object_storage_") {
         "/data".to_string()
     } else {
         "unknown".to_string()
