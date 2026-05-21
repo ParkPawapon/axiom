@@ -3,7 +3,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Datelike, Utc};
+use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, HOST};
 use sha2::{Digest, Sha256};
 
 use crate::domain::database::database_config::{
@@ -20,6 +23,15 @@ use crate::shared::result::app_result::AppResult;
 const REMOTE_COPY_TIMEOUT: Duration = Duration::from_secs(180);
 const REMOTE_COPY_OUTPUT_LIMIT_BYTES: usize = 64 * 1024;
 const R2_ENDPOINT_URL_ENV: &str = "AXIOM_R2_ENDPOINT_URL";
+const AWS_ACCESS_KEY_ID_ENV: &str = "AWS_ACCESS_KEY_ID";
+const AWS_SECRET_ACCESS_KEY_ENV: &str = "AWS_SECRET_ACCESS_KEY";
+const AWS_SESSION_TOKEN_ENV: &str = "AWS_SESSION_TOKEN";
+const AWS_REGION_ENV: &str = "AWS_REGION";
+const AWS_DEFAULT_REGION_ENV: &str = "AWS_DEFAULT_REGION";
+const R2_ACCESS_KEY_ID_ENV: &str = "AXIOM_R2_ACCESS_KEY_ID";
+const R2_SECRET_ACCESS_KEY_ENV: &str = "AXIOM_R2_SECRET_ACCESS_KEY";
+const GCS_ACCESS_TOKEN_ENV: &str = "AXIOM_GCS_ACCESS_TOKEN";
+const GOOGLE_OAUTH_ACCESS_TOKEN_ENV: &str = "GOOGLE_OAUTH_ACCESS_TOKEN";
 
 pub fn copy_backup_to_remote_destination(
     result: &DatabaseBackupResult,
@@ -34,7 +46,8 @@ pub fn copy_backup_to_remote_destination(
             copy_backup_to_local_destination(result, destination)
         }
         DatabaseBackupRemoteDestinationProvider::S3 => {
-            copy_backup_with_aws_cli(result, destination, None)
+            copy_backup_with_s3_native(result, destination, None)
+                .or_else(|_| copy_backup_with_aws_cli(result, destination, None))
         }
         DatabaseBackupRemoteDestinationProvider::R2 => {
             let endpoint_url = std::env::var(R2_ENDPOINT_URL_ENV).map_err(|_| {
@@ -42,11 +55,14 @@ pub fn copy_backup_to_remote_destination(
                     "{R2_ENDPOINT_URL_ENV} is required for R2 backup destinations"
                 ))
             })?;
+            let endpoint_url = endpoint_url.trim().to_string();
 
-            copy_backup_with_aws_cli(result, destination, Some(endpoint_url.trim().to_string()))
+            copy_backup_with_s3_native(result, destination, Some(endpoint_url.clone()))
+                .or_else(|_| copy_backup_with_aws_cli(result, destination, Some(endpoint_url)))
         }
         DatabaseBackupRemoteDestinationProvider::Gcs => {
-            copy_backup_with_gcloud(result, destination)
+            copy_backup_with_gcs_native(result, destination)
+                .or_else(|_| copy_backup_with_gcloud(result, destination))
         }
         DatabaseBackupRemoteDestinationProvider::Sftp => copy_backup_with_scp(result, destination),
     }
@@ -108,6 +124,122 @@ fn copy_backup_with_aws_cli(
             "aws s3 backup copy",
             run_remote_copy(&runner, &aws_path, args)?,
         )?;
+        copied_paths.push(remote_copy_receipt(
+            destination,
+            &source_path,
+            target,
+            true,
+        )?);
+    }
+
+    Ok(copied_paths)
+}
+
+fn copy_backup_with_s3_native(
+    result: &DatabaseBackupResult,
+    destination: &DatabaseBackupRemoteDestination,
+    endpoint_url: Option<String>,
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
+    validate_cloud_destination_uri(&destination.destination_path, "s3://")?;
+    let credentials = S3Credentials::from_env(destination.provider)?;
+    let client = Client::builder()
+        .timeout(REMOTE_COPY_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            AppError::Infrastructure(format!("failed to initialize S3 client: {error}"))
+        })?;
+    let mut copied_paths = Vec::new();
+
+    for source_path in backup_artifact_paths(result) {
+        let source_path = validate_source_artifact(&source_path)?;
+        let target = remote_target_uri(destination, &source_path)?;
+        let target_parts = parse_s3_uri(&target)?;
+        let bytes = fs::read(&source_path).map_err(|error| {
+            AppError::Infrastructure(format!(
+                "failed to read backup artifact for S3 upload: {error}"
+            ))
+        })?;
+        let request = S3PutRequest::new(&target_parts, endpoint_url.as_deref(), &credentials)?;
+        let payload_sha256 = hex_encode(&Sha256::digest(&bytes));
+        let headers = s3_signed_headers(&request, &credentials, &payload_sha256, bytes.len())?;
+        let response = client
+            .put(&request.url)
+            .headers(headers)
+            .body(bytes)
+            .send()
+            .map_err(|error| {
+                AppError::Infrastructure(format!("native S3 backup upload failed: {error}"))
+            })?;
+
+        if !response.status().is_success() {
+            return Err(AppError::Infrastructure(format!(
+                "native S3 backup upload returned HTTP {}",
+                response.status()
+            )));
+        }
+
+        copied_paths.push(remote_copy_receipt(
+            destination,
+            &source_path,
+            target,
+            true,
+        )?);
+    }
+
+    Ok(copied_paths)
+}
+
+fn copy_backup_with_gcs_native(
+    result: &DatabaseBackupResult,
+    destination: &DatabaseBackupRemoteDestination,
+) -> AppResult<Vec<DatabaseBackupRemoteCopyReceipt>> {
+    validate_cloud_destination_uri(&destination.destination_path, "gs://")?;
+    let access_token = env_value(GCS_ACCESS_TOKEN_ENV)
+        .or_else(|| env_value(GOOGLE_OAUTH_ACCESS_TOKEN_ENV))
+        .ok_or_else(|| {
+            AppError::Configuration(format!(
+                "{GCS_ACCESS_TOKEN_ENV} or {GOOGLE_OAUTH_ACCESS_TOKEN_ENV} is required for native GCS uploads"
+            ))
+        })?;
+    let client = Client::builder()
+        .timeout(REMOTE_COPY_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            AppError::Infrastructure(format!("failed to initialize GCS client: {error}"))
+        })?;
+    let mut copied_paths = Vec::new();
+
+    for source_path in backup_artifact_paths(result) {
+        let source_path = validate_source_artifact(&source_path)?;
+        let target = remote_target_uri(destination, &source_path)?;
+        let target_parts = parse_gcs_uri(&target)?;
+        let bytes = fs::read(&source_path).map_err(|error| {
+            AppError::Infrastructure(format!(
+                "failed to read backup artifact for GCS upload: {error}"
+            ))
+        })?;
+        let url = format!(
+            "https://storage.googleapis.com/upload/storage/v1/b/{}/o?uploadType=media&name={}",
+            percent_encode_query_value(&target_parts.bucket),
+            percent_encode_query_value(&target_parts.key)
+        );
+        let response = client
+            .post(url)
+            .bearer_auth(&access_token)
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .map_err(|error| {
+                AppError::Infrastructure(format!("native GCS backup upload failed: {error}"))
+            })?;
+
+        if !response.status().is_success() {
+            return Err(AppError::Infrastructure(format!(
+                "native GCS backup upload returned HTTP {}",
+                response.status()
+            )));
+        }
+
         copied_paths.push(remote_copy_receipt(
             destination,
             &source_path,
@@ -233,6 +365,262 @@ fn validate_cloud_destination_uri(value: &str, prefix: &str) -> AppResult<()> {
     if !value.starts_with(prefix) || value.len() <= prefix.len() {
         return Err(AppError::Validation(format!(
             "backup destination URI must start with {prefix}"
+        )));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct CloudObjectUri {
+    bucket: String,
+    key: String,
+}
+
+fn parse_s3_uri(uri: &str) -> AppResult<CloudObjectUri> {
+    parse_cloud_object_uri(uri, "s3://", "S3")
+}
+
+fn parse_gcs_uri(uri: &str) -> AppResult<CloudObjectUri> {
+    parse_cloud_object_uri(uri, "gs://", "GCS")
+}
+
+fn parse_cloud_object_uri(uri: &str, prefix: &str, label: &str) -> AppResult<CloudObjectUri> {
+    validate_cloud_destination_uri(uri, prefix)?;
+    let value = uri.trim().strip_prefix(prefix).ok_or_else(|| {
+        AppError::Validation(format!("{label} destination must start with {prefix}"))
+    })?;
+    let Some((bucket, key)) = value.split_once('/') else {
+        return Err(AppError::Validation(format!(
+            "{label} destination must include a bucket and object key"
+        )));
+    };
+
+    if !valid_cloud_bucket_name(bucket) || key.trim().is_empty() {
+        return Err(AppError::Validation(format!(
+            "{label} destination bucket or object key is invalid"
+        )));
+    }
+
+    Ok(CloudObjectUri {
+        bucket: bucket.to_string(),
+        key: key.to_string(),
+    })
+}
+
+fn valid_cloud_bucket_name(bucket: &str) -> bool {
+    (3..=63).contains(&bucket.len())
+        && bucket.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-')
+        })
+        && bucket
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        && bucket
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct S3Credentials {
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: Option<String>,
+    region: String,
+}
+
+impl S3Credentials {
+    fn from_env(provider: DatabaseBackupRemoteDestinationProvider) -> AppResult<Self> {
+        let access_key_id = match provider {
+            DatabaseBackupRemoteDestinationProvider::R2 => {
+                env_value(R2_ACCESS_KEY_ID_ENV).or_else(|| env_value(AWS_ACCESS_KEY_ID_ENV))
+            }
+            _ => env_value(AWS_ACCESS_KEY_ID_ENV),
+        }
+        .ok_or_else(|| {
+            AppError::Configuration(format!(
+                "{AWS_ACCESS_KEY_ID_ENV} is required for native S3-compatible uploads"
+            ))
+        })?;
+        let secret_access_key = match provider {
+            DatabaseBackupRemoteDestinationProvider::R2 => {
+                env_value(R2_SECRET_ACCESS_KEY_ENV).or_else(|| env_value(AWS_SECRET_ACCESS_KEY_ENV))
+            }
+            _ => env_value(AWS_SECRET_ACCESS_KEY_ENV),
+        }
+        .ok_or_else(|| {
+            AppError::Configuration(format!(
+                "{AWS_SECRET_ACCESS_KEY_ENV} is required for native S3-compatible uploads"
+            ))
+        })?;
+        let region = env_value(AWS_REGION_ENV)
+            .or_else(|| env_value(AWS_DEFAULT_REGION_ENV))
+            .unwrap_or_else(|| {
+                if provider == DatabaseBackupRemoteDestinationProvider::R2 {
+                    "auto".to_string()
+                } else {
+                    "us-east-1".to_string()
+                }
+            });
+
+        validate_s3_credential_part(&access_key_id, "S3 access key id")?;
+        validate_s3_credential_part(&secret_access_key, "S3 secret access key")?;
+        validate_s3_credential_part(&region, "S3 region")?;
+
+        Ok(Self {
+            access_key_id,
+            secret_access_key,
+            session_token: env_value(AWS_SESSION_TOKEN_ENV),
+            region,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct S3PutRequest {
+    url: String,
+    host: String,
+    canonical_uri: String,
+}
+
+impl S3PutRequest {
+    fn new(
+        target: &CloudObjectUri,
+        endpoint_url: Option<&str>,
+        credentials: &S3Credentials,
+    ) -> AppResult<Self> {
+        if let Some(endpoint_url) = endpoint_url {
+            let endpoint = endpoint_url.trim().trim_end_matches('/');
+            if !endpoint.starts_with("https://") {
+                return Err(AppError::Validation(
+                    "S3-compatible native upload endpoint must use HTTPS".to_string(),
+                ));
+            }
+            let host = endpoint.trim_start_matches("https://").to_string();
+            let canonical_uri = format!(
+                "/{}/{}",
+                percent_encode_path_segment(&target.bucket),
+                percent_encode_path(&target.key)
+            );
+
+            return Ok(Self {
+                url: format!("{endpoint}{canonical_uri}"),
+                host,
+                canonical_uri,
+            });
+        }
+
+        let host = format!("{}.s3.{}.amazonaws.com", target.bucket, credentials.region);
+        let canonical_uri = format!("/{}", percent_encode_path(&target.key));
+
+        Ok(Self {
+            url: format!("https://{host}{canonical_uri}"),
+            host,
+            canonical_uri,
+        })
+    }
+}
+
+fn s3_signed_headers(
+    request: &S3PutRequest,
+    credentials: &S3Credentials,
+    payload_sha256: &str,
+    payload_len: usize,
+) -> AppResult<HeaderMap> {
+    let now = Utc::now();
+    let date_stamp = format!("{:04}{:02}{:02}", now.year(), now.month(), now.day());
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let mut canonical_headers = format!(
+        "host:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
+        request.host, payload_sha256, amz_date
+    );
+    let mut signed_headers = "host;x-amz-content-sha256;x-amz-date".to_string();
+
+    if let Some(session_token) = &credentials.session_token {
+        canonical_headers.push_str("x-amz-security-token:");
+        canonical_headers.push_str(session_token);
+        canonical_headers.push('\n');
+        signed_headers.push_str(";x-amz-security-token");
+    }
+
+    let canonical_request = format!(
+        "PUT\n{}\n\n{}{}\n{}",
+        request.canonical_uri, canonical_headers, signed_headers, payload_sha256
+    );
+    let credential_scope = format!("{}/{}/s3/aws4_request", date_stamp, credentials.region);
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{}\n{}\n{}",
+        amz_date,
+        credential_scope,
+        hex_encode(&Sha256::digest(canonical_request.as_bytes()))
+    );
+    let signing_key = aws_v4_signing_key(
+        &credentials.secret_access_key,
+        &date_stamp,
+        &credentials.region,
+    )?;
+    let signature = hmac_sha256_hex(&signing_key, string_to_sign.as_bytes())?;
+    let authorization = format!(
+        "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
+        credentials.access_key_id, credential_scope, signed_headers, signature
+    );
+    let mut headers = HeaderMap::new();
+
+    headers.insert(HOST, header_value(&request.host)?);
+    headers.insert(
+        HeaderName::from_static("x-amz-content-sha256"),
+        header_value(payload_sha256)?,
+    );
+    headers.insert(
+        HeaderName::from_static("x-amz-date"),
+        header_value(&amz_date)?,
+    );
+    headers.insert(CONTENT_LENGTH, header_value(&payload_len.to_string())?);
+    headers.insert(AUTHORIZATION, header_value(&authorization)?);
+    if let Some(session_token) = &credentials.session_token {
+        headers.insert(
+            HeaderName::from_static("x-amz-security-token"),
+            header_value(session_token)?,
+        );
+    }
+
+    Ok(headers)
+}
+
+fn aws_v4_signing_key(secret: &str, date: &str, region: &str) -> AppResult<Vec<u8>> {
+    let date_key = hmac_sha256(format!("AWS4{secret}").as_bytes(), date.as_bytes())?;
+    let region_key = hmac_sha256(&date_key, region.as_bytes())?;
+    let service_key = hmac_sha256(&region_key, b"s3")?;
+
+    hmac_sha256(&service_key, b"aws4_request")
+}
+
+fn hmac_sha256(key: &[u8], value: &[u8]) -> AppResult<Vec<u8>> {
+    let mut mac = <Hmac<Sha256> as HmacKeyInit>::new_from_slice(key).map_err(|error| {
+        AppError::Infrastructure(format!("failed to initialize HMAC signer: {error}"))
+    })?;
+    mac.update(value);
+
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn hmac_sha256_hex(key: &[u8], value: &[u8]) -> AppResult<String> {
+    hmac_sha256(key, value).map(|digest| hex_encode(&digest))
+}
+
+fn header_value(value: &str) -> AppResult<HeaderValue> {
+    HeaderValue::from_str(value)
+        .map_err(|error| AppError::Validation(format!("HTTP header value is invalid: {error}")))
+}
+
+fn validate_s3_credential_part(value: &str, label: &str) -> AppResult<()> {
+    if value.trim().is_empty() || value.chars().any(char::is_control) {
+        return Err(AppError::Validation(format!(
+            "{label} must not be empty or contain control characters"
         )));
     }
 
@@ -370,6 +758,47 @@ fn hex_encode(bytes: &[u8]) -> String {
     encoded
 }
 
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn percent_encode_path(path: &str) -> String {
+    path.split('/')
+        .map(percent_encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    percent_encode_with(value, true)
+}
+
+fn percent_encode_query_value(value: &str) -> String {
+    percent_encode_with(value, false)
+}
+
+fn percent_encode_with(value: &str, keep_path_safe: bool) -> String {
+    let mut encoded = String::new();
+
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            || (keep_path_safe && byte == b'/')
+        {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+            encoded.push(char::from(b"0123456789ABCDEF"[(byte & 0x0f) as usize]));
+        }
+    }
+
+    encoded
+}
+
 fn resolve_required_executable(name: &str) -> AppResult<PathBuf> {
     ExecutableResolver::from_env()
         .resolve(name)
@@ -485,5 +914,21 @@ mod tests {
         assert!(receipt.verified);
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn parses_scoped_cloud_object_uri() {
+        let uri = parse_s3_uri("s3://bucket-name/prefix/demo.sql.gz.enc").expect("s3 uri");
+
+        assert_eq!(uri.bucket, "bucket-name");
+        assert_eq!(uri.key, "prefix/demo.sql.gz.enc");
+    }
+
+    #[test]
+    fn percent_encodes_gcs_object_names() {
+        assert_eq!(
+            percent_encode_query_value("demo/mysql/a file.sql.gz.enc"),
+            "demo%2Fmysql%2Fa%20file.sql.gz.enc"
+        );
     }
 }
