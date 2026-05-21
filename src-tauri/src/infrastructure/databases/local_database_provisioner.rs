@@ -1,6 +1,6 @@
 use std::fs;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -264,18 +264,21 @@ impl DatabaseProvisioner for LocalDatabaseProvisioner {
         let mut replay_segments = Vec::new();
         for replay_log_path in replay_log_paths {
             let sql_path = prepare_replay_sql(profile, &replay_log_path, &replay_work_dir)?;
+            let segment_kind = replay_segment_kind(profile.database_type, &replay_log_path)?;
 
-            match profile.database_type {
-                DatabaseType::Mysql => {
-                    run_mysql_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
-                }
-                DatabaseType::Postgresql => {
-                    run_postgres_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+            if segment_kind != DatabaseReplaySegmentKind::PostgresPhysicalWal {
+                match profile.database_type {
+                    DatabaseType::Mysql => {
+                        run_mysql_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+                    }
+                    DatabaseType::Postgresql => {
+                        run_postgres_script(profile, &password, &sql_path, MIGRATION_TIMEOUT)?;
+                    }
                 }
             }
 
             replay_segments.push(DatabaseReplaySegment {
-                kind: replay_segment_kind(profile.database_type, &replay_log_path)?,
+                kind: segment_kind,
                 source_path: replay_log_path.to_string_lossy().into_owned(),
                 applied_sql_path: sql_path.to_string_lossy().into_owned(),
                 sha256: sha256_file_hex(&replay_log_path)?,
@@ -584,8 +587,9 @@ fn is_replay_file(database_type: DatabaseType, path: &std::path::Path) -> AppRes
 
     match database_type {
         DatabaseType::Mysql => Ok(is_mysql_binlog_name(&file_name)),
+        DatabaseType::Postgresql if file_name.ends_with(".wal.restore.json") => Ok(true),
         DatabaseType::Postgresql if file_name.ends_with(".wal") => Err(AppError::Validation(
-            "PostgreSQL WAL physical replay requires server-level restore orchestration; provide WAL-derived .sql replay segments for this managed flow".to_string(),
+            "PostgreSQL raw WAL files must be referenced through a .wal.restore.json manifest so the app can validate the app-owned data directory before physical restore orchestration".to_string(),
         )),
         DatabaseType::Postgresql => Ok(false),
     }
@@ -607,6 +611,10 @@ fn replay_segment_kind(
 
     if database_type == DatabaseType::Postgresql && file_name.ends_with(".wal.sql") {
         return Ok(DatabaseReplaySegmentKind::PostgresWalSql);
+    }
+
+    if database_type == DatabaseType::Postgresql && file_name.ends_with(".wal.restore.json") {
+        return Ok(DatabaseReplaySegmentKind::PostgresPhysicalWal);
     }
 
     if file_name.ends_with(".sql") {
@@ -640,6 +648,11 @@ fn prepare_replay_sql(
         return Ok(replay_log_path.to_path_buf());
     }
 
+    if profile.database_type == DatabaseType::Postgresql && file_name.ends_with(".wal.restore.json")
+    {
+        return orchestrate_postgres_physical_wal_restore(profile, replay_log_path);
+    }
+
     if profile.database_type != DatabaseType::Mysql {
         return Err(AppError::Validation(
             "only MySQL binlog files can be converted by the managed replay adapter".to_string(),
@@ -656,6 +669,226 @@ fn prepare_replay_sql(
     run_mysql_binlog_export(replay_log_path, &output_path)?;
 
     Ok(output_path)
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PostgresPhysicalWalRestoreManifest {
+    base_backup_dir: String,
+    wal_archive_dir: String,
+    target_data_dir: String,
+    #[serde(default)]
+    target_time: Option<chrono::DateTime<Utc>>,
+    #[serde(default)]
+    allow_overwrite: bool,
+}
+
+fn orchestrate_postgres_physical_wal_restore(
+    profile: &ProjectDatabaseProfile,
+    manifest_path: &std::path::Path,
+) -> AppResult<PathBuf> {
+    let manifest = fs::read_to_string(manifest_path).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to read PostgreSQL WAL restore manifest: {error}"
+        ))
+    })?;
+    let manifest: PostgresPhysicalWalRestoreManifest =
+        serde_json::from_str(&manifest).map_err(|error| {
+            AppError::Configuration(format!(
+                "PostgreSQL WAL restore manifest is invalid: {error}"
+            ))
+        })?;
+    let profile_data_dir = std::path::Path::new(&profile.data_dir)
+        .canonicalize()
+        .map_err(|error| {
+            AppError::Validation(format!(
+                "profile data directory must exist before physical WAL restore: {error}"
+            ))
+        })?;
+    let base_backup_dir = validate_existing_directory(
+        &manifest.base_backup_dir,
+        "PostgreSQL base backup directory",
+    )?;
+    let wal_archive_dir = validate_existing_directory(
+        &manifest.wal_archive_dir,
+        "PostgreSQL WAL archive directory",
+    )?;
+    let target_data_dir = validate_app_owned_target_data_dir(&profile_data_dir, &manifest)?;
+
+    if target_data_dir.exists()
+        && target_data_dir
+            .read_dir()
+            .map_err(|error| {
+                AppError::Infrastructure(format!(
+                    "failed to inspect target data directory: {error}"
+                ))
+            })?
+            .next()
+            .is_some()
+    {
+        if !manifest.allow_overwrite {
+            return Err(AppError::PermissionDenied(
+                "PostgreSQL physical WAL restore requires allowOverwrite=true because the app-owned target data directory is not empty".to_string(),
+            ));
+        }
+
+        let quarantine = target_data_dir.with_file_name(format!(
+            "{}.before-wal-restore-{}",
+            target_data_dir
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("postgres-data"),
+            Utc::now().format("%Y%m%d%H%M%S")
+        ));
+        fs::rename(&target_data_dir, quarantine).map_err(|error| {
+            AppError::Infrastructure(format!(
+                "failed to quarantine existing PostgreSQL data directory: {error}"
+            ))
+        })?;
+    }
+
+    fs::create_dir_all(&target_data_dir).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to create PostgreSQL target data directory: {error}"
+        ))
+    })?;
+    copy_directory_contents(&base_backup_dir, &target_data_dir)?;
+    write_postgres_recovery_config(&target_data_dir, &wal_archive_dir, manifest.target_time)?;
+
+    let marker_path = target_data_dir.join("axiom-postgres-physical-wal-restore.sql");
+    fs::write(
+        &marker_path,
+        "-- AxiomPHP physical PostgreSQL WAL restore was prepared on disk.\n",
+    )
+    .map_err(|error| {
+        AppError::Infrastructure(format!("failed to write WAL restore marker: {error}"))
+    })?;
+
+    Ok(marker_path)
+}
+
+fn validate_app_owned_target_data_dir(
+    profile_data_dir: &std::path::Path,
+    manifest: &PostgresPhysicalWalRestoreManifest,
+) -> AppResult<PathBuf> {
+    let target_data_dir = std::path::Path::new(manifest.target_data_dir.trim());
+
+    if !target_data_dir.is_absolute() {
+        return Err(AppError::Validation(
+            "PostgreSQL target data directory must be absolute".to_string(),
+        ));
+    }
+
+    let parent = target_data_dir.parent().ok_or_else(|| {
+        AppError::Validation("PostgreSQL target data directory must have a parent".to_string())
+    })?;
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        AppError::Validation(format!(
+            "PostgreSQL target data directory parent must exist: {error}"
+        ))
+    })?;
+    let profile_parent = profile_data_dir.parent().ok_or_else(|| {
+        AppError::Validation("profile data directory must have a parent".to_string())
+    })?;
+
+    if canonical_parent != profile_parent || target_data_dir != profile_data_dir {
+        return Err(AppError::PermissionDenied(
+            "PostgreSQL physical WAL restore is restricted to the app-owned profile data directory"
+                .to_string(),
+        ));
+    }
+
+    Ok(target_data_dir.to_path_buf())
+}
+
+fn copy_directory_contents(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> AppResult<()> {
+    for entry in fs::read_dir(source).map_err(|error| {
+        AppError::Infrastructure(format!("failed to read PostgreSQL base backup: {error}"))
+    })? {
+        let entry = entry.map_err(|error| {
+            AppError::Infrastructure(format!("failed to inspect PostgreSQL base backup: {error}"))
+        })?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+
+        if source_path.is_dir() {
+            fs::create_dir_all(&destination_path).map_err(|error| {
+                AppError::Infrastructure(format!(
+                    "failed to create PostgreSQL restore directory: {error}"
+                ))
+            })?;
+            copy_directory_contents(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                AppError::Infrastructure(format!("failed to copy PostgreSQL restore file: {error}"))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_postgres_recovery_config(
+    target_data_dir: &std::path::Path,
+    wal_archive_dir: &std::path::Path,
+    target_time: Option<chrono::DateTime<Utc>>,
+) -> AppResult<()> {
+    validate_recovery_command_path(wal_archive_dir)?;
+    fs::write(target_data_dir.join("recovery.signal"), "").map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to write PostgreSQL recovery signal: {error}"
+        ))
+    })?;
+    let mut config = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(target_data_dir.join("postgresql.auto.conf"))
+        .map_err(|error| {
+            AppError::Infrastructure(format!(
+                "failed to open PostgreSQL recovery config: {error}"
+            ))
+        })?;
+
+    writeln!(
+        config,
+        "restore_command = 'cp {}/%f %p'",
+        wal_archive_dir.to_string_lossy()
+    )
+    .map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to write PostgreSQL restore command: {error}"
+        ))
+    })?;
+    if let Some(target_time) = target_time {
+        writeln!(
+            config,
+            "recovery_target_time = '{}'",
+            target_time.to_rfc3339()
+        )
+        .map_err(|error| {
+            AppError::Infrastructure(format!(
+                "failed to write PostgreSQL recovery target: {error}"
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn validate_recovery_command_path(path: &std::path::Path) -> AppResult<()> {
+    let value = path.to_string_lossy();
+
+    if value.contains('\'') || value.contains('\n') || value.contains('\r') {
+        return Err(AppError::Validation(
+            "PostgreSQL WAL archive path contains characters unsupported by recovery config"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -732,7 +965,7 @@ fn rollback_path_for_generated_migration(migration_path: &std::path::Path) -> Ap
 }
 
 fn generate_rollback_sql(sql: &str) -> GeneratedRollbackSql {
-    let mut statements = Vec::new();
+    let mut statements = explicit_rollback_annotations(sql);
     let mut warnings = Vec::new();
 
     for statement in sql.split(';') {
@@ -757,6 +990,11 @@ fn generate_rollback_sql(sql: &str) -> GeneratedRollbackSql {
             statements.push(rollback);
         } else if let Some(rollback) = rollback_add_column(statement) {
             statements.push(rollback);
+        } else if destructive_statement_kind(statement).is_some() {
+            warnings.push(format!(
+                "Destructive migration statement requires an explicit `-- axiom:rollback ...` annotation or point-in-time restore: {}",
+                first_words(statement, 12)
+            ));
         } else {
             warnings.push(format!(
                 "Unsupported migration statement was not auto-reversed: {}",
@@ -771,6 +1009,55 @@ fn generate_rollback_sql(sql: &str) -> GeneratedRollbackSql {
         statements,
         warnings,
     }
+}
+
+fn explicit_rollback_annotations(sql: &str) -> Vec<String> {
+    sql.lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("-- axiom:rollback ")
+                .map(str::trim)
+                .filter(|statement| !statement.is_empty())
+                .map(|statement| {
+                    if statement.ends_with(';') {
+                        statement.to_string()
+                    } else {
+                        format!("{statement};")
+                    }
+                })
+        })
+        .collect()
+}
+
+fn destructive_statement_kind(statement: &str) -> Option<&'static str> {
+    let tokens = statement.split_whitespace().collect::<Vec<_>>();
+    let first = tokens.first()?;
+
+    if first.eq_ignore_ascii_case("drop") {
+        return Some("drop");
+    }
+
+    if first.eq_ignore_ascii_case("truncate") {
+        return Some("truncate");
+    }
+
+    if first.eq_ignore_ascii_case("delete") {
+        return Some("delete");
+    }
+
+    if first.eq_ignore_ascii_case("update") {
+        return Some("update");
+    }
+
+    if tokens.len() >= 5
+        && tokens[0].eq_ignore_ascii_case("alter")
+        && tokens[1].eq_ignore_ascii_case("table")
+        && tokens[3].eq_ignore_ascii_case("drop")
+    {
+        return Some("alter-table-drop");
+    }
+
+    None
 }
 
 fn rollback_create_table(statement: &str) -> Option<String> {
@@ -1052,5 +1339,34 @@ mod tests {
             .expect("postgres wal sql"),
             DatabaseReplaySegmentKind::PostgresWalSql
         );
+        assert_eq!(
+            replay_segment_kind(
+                DatabaseType::Postgresql,
+                std::path::Path::new("restore.wal.restore.json")
+            )
+            .expect("postgres physical wal restore"),
+            DatabaseReplaySegmentKind::PostgresPhysicalWal
+        );
+    }
+
+    #[test]
+    fn generated_rollback_requires_annotations_for_destructive_sql() {
+        let generated = generate_rollback_sql(
+            r#"
+            -- axiom:rollback INSERT INTO users (id) VALUES (1);
+            DELETE FROM users WHERE id = 1;
+            DROP TABLE legacy_users;
+            "#,
+        );
+
+        assert!(generated
+            .statements
+            .iter()
+            .any(|statement| statement == "INSERT INTO users (id) VALUES (1);"));
+        assert_eq!(generated.warnings.len(), 2);
+        assert!(generated
+            .warnings
+            .iter()
+            .all(|warning| warning.contains("requires an explicit")));
     }
 }

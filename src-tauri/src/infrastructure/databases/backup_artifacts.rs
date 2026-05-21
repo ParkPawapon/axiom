@@ -13,14 +13,16 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
+use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::domain::database::database_config::{
     DatabaseBackupArtifactTrustEnrollmentResult, DatabaseBackupCompression,
-    DatabaseBackupEncryption, DatabaseBackupKeyManagementStatus, DatabaseBackupKmsEnvelope,
-    DatabaseBackupMetadata, DatabaseBackupOptions, DatabaseBackupTrustBundle,
-    DatabaseBackupTrustExportResult, DatabaseBackupTrustImportResult, ProjectDatabaseProfile,
+    DatabaseBackupEncryptedRecoveryKey, DatabaseBackupEncryption,
+    DatabaseBackupKeyManagementStatus, DatabaseBackupKmsEnvelope, DatabaseBackupMetadata,
+    DatabaseBackupOptions, DatabaseBackupTrustBundle, DatabaseBackupTrustExportResult,
+    DatabaseBackupTrustImportResult, ProjectDatabaseProfile,
 };
 use crate::domain::security::command_policy::{CommandPolicy, ProcessCommand, ProcessOutput};
 use crate::infrastructure::process::command_runner::CommandRunner;
@@ -38,10 +40,16 @@ const BACKUP_ENCRYPTION_KEY_ENV: &str = "AXIOM_BACKUP_ENCRYPTION_KEY_B64";
 const BACKUP_SIGNING_KEY_ENV: &str = "AXIOM_BACKUP_SIGNING_KEY_B64";
 const BACKUP_KMS_PROVIDER_ENV: &str = "AXIOM_BACKUP_KMS_PROVIDER";
 const BACKUP_KMS_KEY_ID_ENV: &str = "AXIOM_BACKUP_KMS_KEY_ID";
+const BACKUP_TRUST_EXPORT_RECOVERY_PASSPHRASE_ENV: &str =
+    "AXIOM_BACKUP_TRUST_EXPORT_RECOVERY_PASSPHRASE";
+const BACKUP_TRUST_IMPORT_RECOVERY_PASSPHRASE_ENV: &str =
+    "AXIOM_BACKUP_TRUST_IMPORT_RECOVERY_PASSPHRASE";
 const ENCRYPTION_MAGIC: &[u8] = b"AXIOMDB1";
 const KMS_ENVELOPE_MAGIC: &[u8] = b"AXIOMDBK2";
 const AES_256_KEY_BYTES: usize = 32;
 const AES_GCM_NONCE_BYTES: usize = 12;
+const RECOVERY_KEY_SALT_BYTES: usize = 16;
+const RECOVERY_KEY_KDF_ITERATIONS: u32 = 210_000;
 const MIN_RETENTION_DAYS: u16 = 1;
 const MAX_RETENTION_DAYS: u16 = 365;
 const KMS_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(60);
@@ -146,6 +154,7 @@ pub fn export_backup_trust_bundle(
         algorithm: "hmac-sha256-key-fingerprint".to_string(),
         signing_key_fingerprint: signing_key_fingerprint.clone(),
         artifact_sha256: None,
+        encrypted_recovery_key: encrypted_recovery_key_for_export(secure_storage)?,
         source_machine: source_machine_label(),
         exported_at: Utc::now(),
     };
@@ -190,6 +199,10 @@ pub fn import_backup_trust_bundle(
 
     if let Some(artifact_sha256) = &bundle.artifact_sha256 {
         enroll_trusted_artifact_hash(secure_storage, artifact_sha256)?;
+    }
+
+    if let Some(encrypted_recovery_key) = &bundle.encrypted_recovery_key {
+        import_encrypted_recovery_key(secure_storage, encrypted_recovery_key)?;
     }
 
     Ok(DatabaseBackupTrustImportResult {
@@ -631,6 +644,127 @@ fn backup_key(secure_storage: &dyn SecureStorage) -> AppResult<[u8; AES_256_KEY_
     )?;
 
     Ok(key)
+}
+
+fn encrypted_recovery_key_for_export(
+    secure_storage: &dyn SecureStorage,
+) -> AppResult<Option<DatabaseBackupEncryptedRecoveryKey>> {
+    let Some(passphrase) = env_value(BACKUP_TRUST_EXPORT_RECOVERY_PASSPHRASE_ENV) else {
+        return Ok(None);
+    };
+    validate_recovery_passphrase(&passphrase)?;
+    let backup_key = backup_key(secure_storage)?;
+    let mut salt = [0_u8; RECOVERY_KEY_SALT_BYTES];
+    let mut nonce = [0_u8; AES_GCM_NONCE_BYTES];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce);
+    let derived_key = derive_recovery_key(&passphrase, &salt, RECOVERY_KEY_KDF_ITERATIONS);
+    let cipher = Aes256Gcm::new_from_slice(&derived_key).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to initialize portable recovery key cipher: {error}"
+        ))
+    })?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), backup_key.as_slice())
+        .map_err(|error| {
+            AppError::Infrastructure(format!(
+                "portable backup recovery key encryption failed: {error}"
+            ))
+        })?;
+
+    Ok(Some(DatabaseBackupEncryptedRecoveryKey {
+        algorithm: "aes-256-gcm".to_string(),
+        kdf: "pbkdf2-hmac-sha256".to_string(),
+        iterations: RECOVERY_KEY_KDF_ITERATIONS,
+        salt: STANDARD.encode(salt),
+        nonce: STANDARD.encode(nonce),
+        ciphertext: STANDARD.encode(ciphertext),
+    }))
+}
+
+fn import_encrypted_recovery_key(
+    secure_storage: &dyn SecureStorage,
+    encrypted_recovery_key: &DatabaseBackupEncryptedRecoveryKey,
+) -> AppResult<()> {
+    let passphrase = env_value(BACKUP_TRUST_IMPORT_RECOVERY_PASSPHRASE_ENV).ok_or_else(|| {
+        AppError::Configuration(format!(
+            "{BACKUP_TRUST_IMPORT_RECOVERY_PASSPHRASE_ENV} is required to import a portable backup recovery key"
+        ))
+    })?;
+    validate_recovery_passphrase(&passphrase)?;
+
+    if encrypted_recovery_key.algorithm != "aes-256-gcm"
+        || encrypted_recovery_key.kdf != "pbkdf2-hmac-sha256"
+    {
+        return Err(AppError::Validation(
+            "backup recovery key bundle uses an unsupported encryption format".to_string(),
+        ));
+    }
+
+    let salt = STANDARD
+        .decode(&encrypted_recovery_key.salt)
+        .map_err(|error| {
+            AppError::Configuration(format!("backup recovery key salt is invalid: {error}"))
+        })?;
+    let nonce = STANDARD
+        .decode(&encrypted_recovery_key.nonce)
+        .map_err(|error| {
+            AppError::Configuration(format!("backup recovery key nonce is invalid: {error}"))
+        })?;
+    let ciphertext = STANDARD
+        .decode(&encrypted_recovery_key.ciphertext)
+        .map_err(|error| {
+            AppError::Configuration(format!(
+                "backup recovery key ciphertext is invalid: {error}"
+            ))
+        })?;
+
+    if nonce.len() != AES_GCM_NONCE_BYTES {
+        return Err(AppError::Validation(
+            "backup recovery key nonce has invalid length".to_string(),
+        ));
+    }
+
+    let derived_key = derive_recovery_key(&passphrase, &salt, encrypted_recovery_key.iterations);
+    let cipher = Aes256Gcm::new_from_slice(&derived_key).map_err(|error| {
+        AppError::Infrastructure(format!(
+            "failed to initialize portable recovery key cipher: {error}"
+        ))
+    })?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_slice())
+        .map_err(|error| {
+            AppError::PermissionDenied(format!("backup recovery key decryption failed: {error}"))
+        })?;
+
+    if plaintext.len() != AES_256_KEY_BYTES {
+        return Err(AppError::Validation(
+            "backup recovery key plaintext has invalid length".to_string(),
+        ));
+    }
+
+    secure_storage.store_secret(
+        BACKUP_SECRET_NAMESPACE,
+        BACKUP_ENCRYPTION_KEY,
+        &STANDARD.encode(plaintext),
+    )
+}
+
+fn derive_recovery_key(passphrase: &str, salt: &[u8], iterations: u32) -> [u8; AES_256_KEY_BYTES] {
+    let mut key = [0_u8; AES_256_KEY_BYTES];
+    pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, iterations, &mut key);
+    key
+}
+
+fn validate_recovery_passphrase(passphrase: &str) -> AppResult<()> {
+    if passphrase.chars().count() < 16 || passphrase.chars().any(char::is_control) {
+        return Err(AppError::Validation(
+            "backup recovery passphrase must be at least 16 characters and contain no control characters"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn signing_key(secure_storage: &dyn SecureStorage) -> AppResult<([u8; AES_256_KEY_BYTES], String)> {

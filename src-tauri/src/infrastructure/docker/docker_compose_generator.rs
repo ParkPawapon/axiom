@@ -13,7 +13,12 @@ const MYSQL_CONTAINER_PORT: u16 = 3306;
 const REDIS_CONTAINER_PORT: u16 = 6379;
 const MAILPIT_SMTP_CONTAINER_PORT: u16 = 1025;
 const MAILPIT_WEB_CONTAINER_PORT: u16 = 8025;
+const MINIO_API_CONTAINER_PORT: u16 = 9000;
+const MINIO_CONSOLE_CONTAINER_PORT: u16 = 9001;
+const OPENSEARCH_CONTAINER_PORT: u16 = 9200;
 const POSTGRES_CONTAINER_PORT: u16 = 5432;
+const RABBITMQ_AMQP_CONTAINER_PORT: u16 = 5672;
+const RABBITMQ_MANAGEMENT_CONTAINER_PORT: u16 = 15672;
 const REVERSE_PROXY_CONTAINER_PORT: u16 = 80;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +40,12 @@ pub struct DockerProjectPorts {
     pub redis_host_port: u16,
     pub mailpit_smtp_host_port: u16,
     pub mailpit_web_host_port: u16,
+    pub minio_api_host_port: u16,
+    pub minio_console_host_port: u16,
+    pub opensearch_host_port: u16,
     pub postgres_host_port: u16,
+    pub rabbitmq_amqp_host_port: u16,
+    pub rabbitmq_management_host_port: u16,
     pub reverse_proxy_host_port: u16,
 }
 
@@ -185,6 +195,102 @@ impl DockerComposeGenerator {
             ));
         }
 
+        if profiles.contains(&DockerComposeProfile::Queue) {
+            let image = required_image(&input.images, DockerComposeProfile::Queue).to_string();
+            let volume_name = queue_volume_name(&input.project_id);
+            services.push(DockerProjectServicePlan {
+                profile: DockerComposeProfile::Queue,
+                service_name: "queue".to_string(),
+                image: image.clone(),
+                host_port: Some(input.ports.rabbitmq_management_host_port),
+                container_port: Some(RABBITMQ_MANAGEMENT_CONTAINER_PORT),
+                status_message: "Project-specific RabbitMQ queue profile is included.".to_string(),
+            });
+            volumes.push(DockerProjectVolumePlan {
+                name: volume_name.clone(),
+                service_name: "queue".to_string(),
+                mount_path: "/var/lib/rabbitmq".to_string(),
+                created: false,
+            });
+            yaml.push_str(&queue_service_yaml(
+                &image,
+                input.ports.rabbitmq_amqp_host_port,
+                input.ports.rabbitmq_management_host_port,
+                &volume_name,
+                input.resource_limits,
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::Search) {
+            let image = required_image(&input.images, DockerComposeProfile::Search).to_string();
+            let volume_name = search_volume_name(&input.project_id);
+            services.push(DockerProjectServicePlan {
+                profile: DockerComposeProfile::Search,
+                service_name: "search".to_string(),
+                image: image.clone(),
+                host_port: Some(input.ports.opensearch_host_port),
+                container_port: Some(OPENSEARCH_CONTAINER_PORT),
+                status_message: "Project-specific OpenSearch profile is included.".to_string(),
+            });
+            volumes.push(DockerProjectVolumePlan {
+                name: volume_name.clone(),
+                service_name: "search".to_string(),
+                mount_path: "/usr/share/opensearch/data".to_string(),
+                created: false,
+            });
+            yaml.push_str(&search_service_yaml(
+                &image,
+                input.ports.opensearch_host_port,
+                &volume_name,
+                input.resource_limits,
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::ObjectStorage) {
+            let image =
+                required_image(&input.images, DockerComposeProfile::ObjectStorage).to_string();
+            let volume_name = object_storage_volume_name(&input.project_id);
+            services.push(DockerProjectServicePlan {
+                profile: DockerComposeProfile::ObjectStorage,
+                service_name: "object-storage".to_string(),
+                image: image.clone(),
+                host_port: Some(input.ports.minio_console_host_port),
+                container_port: Some(MINIO_CONSOLE_CONTAINER_PORT),
+                status_message: "Project-specific MinIO object storage profile is included."
+                    .to_string(),
+            });
+            volumes.push(DockerProjectVolumePlan {
+                name: volume_name.clone(),
+                service_name: "object-storage".to_string(),
+                mount_path: "/data".to_string(),
+                created: false,
+            });
+            yaml.push_str(&object_storage_service_yaml(
+                &image,
+                input.ports.minio_api_host_port,
+                input.ports.minio_console_host_port,
+                &volume_name,
+                input.resource_limits,
+            ));
+        }
+
+        if profiles.contains(&DockerComposeProfile::Worker) {
+            let image = required_image(&input.images, DockerComposeProfile::Worker).to_string();
+            services.push(DockerProjectServicePlan {
+                profile: DockerComposeProfile::Worker,
+                service_name: "worker".to_string(),
+                image: image.clone(),
+                host_port: None,
+                container_port: None,
+                status_message: "Project-specific PHP worker profile is included.".to_string(),
+            });
+            yaml.push_str(&worker_service_yaml(
+                &image,
+                &input.document_root,
+                input.resource_limits,
+            ));
+        }
+
         let reverse_proxy_config = profiles
             .contains(&DockerComposeProfile::ReverseProxy)
             .then(reverse_proxy_config);
@@ -268,6 +374,21 @@ pub fn redis_volume_name(project_id: &str) -> String {
     format!("axiom_{}_redis_data", volume_safe_project_id(project_id))
 }
 
+pub fn queue_volume_name(project_id: &str) -> String {
+    format!("axiom_{}_queue_data", volume_safe_project_id(project_id))
+}
+
+pub fn search_volume_name(project_id: &str) -> String {
+    format!("axiom_{}_search_data", volume_safe_project_id(project_id))
+}
+
+pub fn object_storage_volume_name(project_id: &str) -> String {
+    format!(
+        "axiom_{}_object_storage_data",
+        volume_safe_project_id(project_id)
+    )
+}
+
 pub fn image_trust_evaluation(
     profile: DockerComposeProfile,
     image: &str,
@@ -288,6 +409,8 @@ pub fn image_trust_evaluation(
         pinned_by_digest,
         registry_allowed,
         metadata_verified,
+        signature_verified: false,
+        signature_required: false,
         allowed,
         metadata: None,
         status_message,
@@ -431,6 +554,116 @@ fn mailpit_service_yaml(
     )
 }
 
+fn queue_service_yaml(
+    image: &str,
+    amqp_host_port: u16,
+    management_host_port: u16,
+    volume_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
+    format!(
+        r#"  queue:
+    image: {image}
+    profiles: ["queue"]
+    ports:
+      - "127.0.0.1:{amqp_host_port}:{amqp_container_port}"
+      - "127.0.0.1:{management_host_port}:{management_container_port}"
+    volumes:
+      - {volume_name}:/var/lib/rabbitmq
+    labels:
+      dev.axiomphp.service: "queue"
+{resource_limits}
+"#,
+        image = quote_yaml(image),
+        amqp_container_port = RABBITMQ_AMQP_CONTAINER_PORT,
+        management_container_port = RABBITMQ_MANAGEMENT_CONTAINER_PORT,
+        resource_limits = resource_limit_yaml(resource_limits),
+    )
+}
+
+fn search_service_yaml(
+    image: &str,
+    host_port: u16,
+    volume_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
+    format!(
+        r#"  search:
+    image: {image}
+    profiles: ["search"]
+    ports:
+      - "127.0.0.1:{host_port}:{container_port}"
+    environment:
+      discovery.type: "single-node"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${{AXIOM_SEARCH_ADMIN_PASSWORD}}"
+    volumes:
+      - {volume_name}:/usr/share/opensearch/data
+    labels:
+      dev.axiomphp.service: "search"
+{resource_limits}
+"#,
+        image = quote_yaml(image),
+        container_port = OPENSEARCH_CONTAINER_PORT,
+        resource_limits = resource_limit_yaml(resource_limits),
+    )
+}
+
+fn object_storage_service_yaml(
+    image: &str,
+    api_host_port: u16,
+    console_host_port: u16,
+    volume_name: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
+    format!(
+        r#"  object-storage:
+    image: {image}
+    profiles: ["object-storage"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "127.0.0.1:{api_host_port}:{api_container_port}"
+      - "127.0.0.1:{console_host_port}:{console_container_port}"
+    environment:
+      MINIO_ROOT_USER: "${{AXIOM_OBJECT_STORAGE_ROOT_USER}}"
+      MINIO_ROOT_PASSWORD: "${{AXIOM_OBJECT_STORAGE_ROOT_PASSWORD}}"
+    volumes:
+      - {volume_name}:/data
+    labels:
+      dev.axiomphp.service: "object-storage"
+{resource_limits}
+"#,
+        image = quote_yaml(image),
+        api_container_port = MINIO_API_CONTAINER_PORT,
+        console_container_port = MINIO_CONSOLE_CONTAINER_PORT,
+        resource_limits = resource_limit_yaml(resource_limits),
+    )
+}
+
+fn worker_service_yaml(
+    image: &str,
+    document_root: &str,
+    resource_limits: DockerProjectResourceLimits,
+) -> String {
+    format!(
+        r#"  worker:
+    image: {image}
+    profiles: ["worker"]
+    working_dir: /workspace
+    command: ["php", "-v"]
+    volumes:
+      - type: bind
+        source: {document_root}
+        target: /workspace
+    labels:
+      dev.axiomphp.service: "worker"
+{resource_limits}
+"#,
+        image = quote_yaml(image),
+        document_root = quote_yaml(document_root),
+        resource_limits = resource_limit_yaml(resource_limits),
+    )
+}
+
 fn reverse_proxy_service_yaml(
     image: &str,
     host_port: u16,
@@ -487,10 +720,14 @@ pub fn default_image(profile: DockerComposeProfile) -> &'static str {
     match profile {
         DockerComposeProfile::Mailpit => "axllent/mailpit:v1.22",
         DockerComposeProfile::Mysql => "mysql:8.4",
+        DockerComposeProfile::ObjectStorage => "minio/minio:RELEASE.2025-04-22T22-12-26Z",
         DockerComposeProfile::Php => "php:8.4-cli",
         DockerComposeProfile::Postgresql => "postgres:17",
+        DockerComposeProfile::Queue => "rabbitmq:3.13-management",
         DockerComposeProfile::Redis => "redis:7-alpine",
         DockerComposeProfile::ReverseProxy => "nginx:1.27-alpine",
+        DockerComposeProfile::Search => "opensearchproject/opensearch:2",
+        DockerComposeProfile::Worker => "php:8.4-cli",
     }
 }
 
@@ -569,5 +806,60 @@ mod tests {
 
         assert!(profiles.contains(&DockerComposeProfile::Php));
         assert!(profiles.contains(&DockerComposeProfile::ReverseProxy));
+    }
+
+    #[test]
+    fn generates_broad_project_service_profiles() {
+        let mut images = BTreeMap::new();
+        let digest = format!("@sha256:{}", "a".repeat(64));
+        for profile in [
+            DockerComposeProfile::Php,
+            DockerComposeProfile::Queue,
+            DockerComposeProfile::Search,
+            DockerComposeProfile::ObjectStorage,
+            DockerComposeProfile::Worker,
+        ] {
+            images.insert(profile, format!("{}{}", default_image(profile), digest));
+        }
+        let output = DockerComposeGenerator
+            .generate(DockerComposeGenerationInput {
+                project_id: "demo".to_string(),
+                document_root: std::env::temp_dir().to_string_lossy().into_owned(),
+                compose_project_name: "axiom_demo".to_string(),
+                env_file_name: "compose.env".to_string(),
+                reverse_proxy_config_file_name: "reverse-proxy.conf".to_string(),
+                profiles: vec![
+                    DockerComposeProfile::Php,
+                    DockerComposeProfile::Queue,
+                    DockerComposeProfile::Search,
+                    DockerComposeProfile::ObjectStorage,
+                    DockerComposeProfile::Worker,
+                ],
+                images,
+                ports: DockerProjectPorts {
+                    mysql_host_port: 33060,
+                    redis_host_port: 63790,
+                    mailpit_smtp_host_port: 10250,
+                    mailpit_web_host_port: 18250,
+                    minio_api_host_port: 19000,
+                    minio_console_host_port: 19100,
+                    opensearch_host_port: 19200,
+                    postgres_host_port: 54320,
+                    rabbitmq_amqp_host_port: 26720,
+                    rabbitmq_management_host_port: 16720,
+                    reverse_proxy_host_port: 18080,
+                },
+                resource_limits: DockerProjectResourceLimits::default(),
+            })
+            .expect("compose");
+
+        assert!(output.compose_yaml.contains("queue:"));
+        assert!(output.compose_yaml.contains("search:"));
+        assert!(output.compose_yaml.contains("object-storage:"));
+        assert!(output.compose_yaml.contains("worker:"));
+        assert!(output
+            .volumes
+            .iter()
+            .any(|volume| volume.service_name == "object-storage"));
     }
 }

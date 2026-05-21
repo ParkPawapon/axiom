@@ -11,13 +11,14 @@ Docker actions must remain backend-owned, allowlisted, and project-scoped.
 - Tauri command handlers are thin and call `application/docker` use cases.
 - Use cases resolve registered projects through `ProjectRepository` before invoking the Docker orchestration port.
 - `ProjectDockerOrchestrator` writes app-owned Compose files under the AxiomPHP data directory.
-- Compose generation supports PHP, MySQL, PostgreSQL, Redis, Mailpit, and reverse proxy profiles.
-- MySQL, PostgreSQL, and Redis use project-specific Docker named volumes with `dev.axiomphp.project-id` labels.
+- Compose generation supports PHP, MySQL, PostgreSQL, Redis, Mailpit, reverse proxy, queue, search, object storage, and worker profiles.
+- MySQL, PostgreSQL, Redis, queue, search, and object storage use project-specific Docker named volumes with `dev.axiomphp.project-id` labels.
 - Reverse proxy config is generated per project and proxies to the project PHP service.
 - Docker CLI execution goes through `CommandRunner` with an absolute Docker binary allowlist.
 - Docker logs are read through the Rust backend and sanitized before crossing into the frontend.
 - Docker diagnostics report CLI, engine, Compose, and selected context readiness after Docker Desktop reset.
 - Optional `AXIOM_DOCKER_CONTEXT` routes diagnostics and runtime commands through a validated Docker context name.
+- Optional `AXIOM_DOCKER_AUTH_CONFIG` or `DOCKER_AUTH_CONFIG` supports private registry metadata inspection without storing credentials in frontend state.
 - Per-project resource limits are accepted for generated services as Compose `cpus` and `mem_limit` settings.
 
 ## Image Trust Policy
@@ -35,14 +36,19 @@ AXIOM_DOCKER_MYSQL_IMAGE=mysql:8.4@sha256:<digest>
 AXIOM_DOCKER_POSTGRES_IMAGE=postgres:17@sha256:<digest>
 AXIOM_DOCKER_REDIS_IMAGE=redis:7-alpine@sha256:<digest>
 AXIOM_DOCKER_REVERSE_PROXY_IMAGE=nginx:1.27-alpine@sha256:<digest>
+AXIOM_DOCKER_QUEUE_IMAGE=rabbitmq:3.13-management@sha256:<digest>
+AXIOM_DOCKER_SEARCH_IMAGE=opensearchproject/opensearch:2@sha256:<digest>
+AXIOM_DOCKER_OBJECT_STORAGE_IMAGE=minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:<digest>
+AXIOM_DOCKER_WORKER_IMAGE=php:8.4-cli@sha256:<digest>
 ```
 
 Tagged image references are shown in the UI for planning and can be resolved to digest-pinned
 references with the image pinning workflow. Runtime start remains blocked until digest pinning,
 allowed registry checks, and metadata verification all pass.
 
-This branch verifies registry metadata with `docker buildx imagetools inspect`. It does not perform
-cosign, Notary, or external transparency-log verification yet.
+This branch verifies registry metadata with `docker buildx imagetools inspect`. It can also require
+cosign verification by setting `AXIOM_DOCKER_COSIGN_REQUIRED=true` and optional certificate identity
+or OIDC issuer regular expressions.
 
 ## Safety Gates
 
@@ -70,6 +76,5 @@ cargo test --manifest-path src-tauri/Cargo.toml --test docker_orchestration_inte
 
 ## Remaining Hardening
 
-- Registry signature verification with cosign, Notary, or organization trust metadata.
-- Registry authentication UX for private image metadata resolution.
-- Broader template coverage for queues, search, object storage, and project-specific workers.
+- Native registry trust metadata beyond digest and optional cosign policy, such as organization-specific attestations.
+- Real Docker runtime integration tests remain opt-in because they start containers.

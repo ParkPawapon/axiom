@@ -9,10 +9,14 @@ use crate::domain::project::project_id::ProjectId;
 pub enum DockerComposeProfile {
     Mailpit,
     Mysql,
+    ObjectStorage,
     Php,
     Postgresql,
+    Queue,
     Redis,
     ReverseProxy,
+    Search,
+    Worker,
 }
 
 impl DockerComposeProfile {
@@ -20,10 +24,14 @@ impl DockerComposeProfile {
         match self {
             Self::Mailpit => "mailpit",
             Self::Mysql => "mysql",
+            Self::ObjectStorage => "objectStorage",
             Self::Php => "php",
             Self::Postgresql => "postgresql",
+            Self::Queue => "queue",
             Self::Redis => "redis",
             Self::ReverseProxy => "reverseProxy",
+            Self::Search => "search",
+            Self::Worker => "worker",
         }
     }
 
@@ -31,10 +39,14 @@ impl DockerComposeProfile {
         match self {
             Self::Mailpit => "mailpit",
             Self::Mysql => "mysql",
+            Self::ObjectStorage => "object-storage",
             Self::Php => "php",
             Self::Postgresql => "postgresql",
+            Self::Queue => "queue",
             Self::Redis => "redis",
             Self::ReverseProxy => "reverse-proxy",
+            Self::Search => "search",
+            Self::Worker => "worker",
         }
     }
 }
@@ -74,6 +86,8 @@ pub struct DockerRegistryTrustMetadata {
     pub media_type: String,
     pub platform_count: usize,
     pub allowed_registry: bool,
+    pub signature_verified: bool,
+    pub signature_required: bool,
     pub status_message: String,
 }
 
@@ -103,6 +117,8 @@ pub struct DockerImageTrustEvaluation {
     pub pinned_by_digest: bool,
     pub registry_allowed: bool,
     pub metadata_verified: bool,
+    pub signature_verified: bool,
+    pub signature_required: bool,
     pub allowed: bool,
     pub metadata: Option<DockerRegistryTrustMetadata>,
     pub status_message: String,
@@ -213,6 +229,10 @@ pub struct DockerDiagnosticsReport {
     pub engine_running: bool,
     pub compose_available: bool,
     pub docker_context: Option<String>,
+    pub private_registry_auth_configured: bool,
+    pub private_registry_auth_source: Option<String>,
+    pub signature_verifier_available: bool,
+    pub signature_verification_required: bool,
     pub checks: Vec<DockerDiagnosticCheck>,
     pub status_message: String,
 }

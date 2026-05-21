@@ -1,6 +1,6 @@
 # Security Architecture
 
-AxiomPHP is designed as a secure desktop utility for local PHP development workflows. The repository now includes safe passive probes and explicit PHP package-manager installation, while project process supervision and service lifecycle control remain behind future boundaries.
+AxiomPHP is designed as a secure desktop utility for local PHP development workflows. The repository now includes project CRUD, PHP runtime selection, project PHP process supervision, service lifecycle adapters, managed database provisioning, backup/restore orchestration, security controls, and project-scoped Docker orchestration behind Rust application use cases and infrastructure ports.
 
 ## Trust Boundaries
 
@@ -9,7 +9,7 @@ AxiomPHP is designed as a secure desktop utility for local PHP development workf
 - Application use cases own orchestration.
 - Domain modules stay pure and platform independent.
 - Infrastructure adapters own external systems.
-- Platform adapters isolate macOS and Windows behavior.
+- Platform adapters isolate macOS, Windows, and optional Linux scheduler behavior.
 
 ## Command Execution Policy
 
@@ -24,9 +24,11 @@ Package-manager installation is constrained by these rules:
 - Commands have fixed arguments, timeouts, and output limits.
 - Failed installs do not update the project PHP selection.
 
+Docker, database, certificate, service, scheduler, and backup operations follow the same rule: Tauri commands call use cases only, use cases call ports, and infrastructure adapters perform allowlisted external execution with bounded arguments, timeouts, output limits, and sanitized diagnostics.
+
 ## Validation Policy
 
-Future implementation must validate:
+Implementation must validate:
 
 - project names
 - filesystem paths
@@ -36,6 +38,9 @@ Future implementation must validate:
 - local domains
 - environment variable keys
 - certificate paths
+- Docker image references
+- backup destinations and replay files
+- rollback annotations
 
 ## Secret Handling Policy
 

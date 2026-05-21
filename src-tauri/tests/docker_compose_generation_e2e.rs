@@ -42,6 +42,22 @@ fn compose_generation_covers_all_project_service_profiles() {
             DockerComposeProfile::ReverseProxy,
             format!("docker.io/library/nginx:1.27-alpine@sha256:{digest}"),
         ),
+        (
+            DockerComposeProfile::Queue,
+            format!("docker.io/library/rabbitmq:3.13-management@sha256:{digest}"),
+        ),
+        (
+            DockerComposeProfile::Search,
+            format!("docker.io/opensearchproject/opensearch:2@sha256:{digest}"),
+        ),
+        (
+            DockerComposeProfile::ObjectStorage,
+            format!("docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:{digest}"),
+        ),
+        (
+            DockerComposeProfile::Worker,
+            format!("docker.io/library/php:8.4-cli@sha256:{digest}"),
+        ),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
@@ -59,6 +75,10 @@ fn compose_generation_covers_all_project_service_profiles() {
                 DockerComposeProfile::Redis,
                 DockerComposeProfile::Mailpit,
                 DockerComposeProfile::ReverseProxy,
+                DockerComposeProfile::Queue,
+                DockerComposeProfile::Search,
+                DockerComposeProfile::ObjectStorage,
+                DockerComposeProfile::Worker,
             ],
             images,
             ports: DockerProjectPorts {
@@ -66,7 +86,12 @@ fn compose_generation_covers_all_project_service_profiles() {
                 redis_host_port: 63791,
                 mailpit_smtp_host_port: 10251,
                 mailpit_web_host_port: 8026,
+                minio_api_host_port: 19000,
+                minio_console_host_port: 19001,
+                opensearch_host_port: 19200,
                 postgres_host_port: 54321,
+                rabbitmq_amqp_host_port: 26720,
+                rabbitmq_management_host_port: 16720,
                 reverse_proxy_host_port: 18081,
             },
             resource_limits: DockerProjectResourceLimits {
@@ -76,11 +101,15 @@ fn compose_generation_covers_all_project_service_profiles() {
         })
         .expect("compose generation");
 
-    assert_eq!(output.services.len(), 6);
-    assert_eq!(output.volumes.len(), 3);
+    assert_eq!(output.services.len(), 10);
+    assert_eq!(output.volumes.len(), 6);
     assert!(output.compose_yaml.contains("mem_limit: \"512m\""));
     assert!(output.compose_yaml.contains("cpus: \"0.50\""));
     assert!(output.compose_yaml.contains("reverse-proxy"));
+    assert!(output.compose_yaml.contains("queue"));
+    assert!(output.compose_yaml.contains("search"));
+    assert!(output.compose_yaml.contains("object-storage"));
+    assert!(output.compose_yaml.contains("worker"));
     assert!(output.reverse_proxy_config.is_some());
     assert!(output
         .image_trust
