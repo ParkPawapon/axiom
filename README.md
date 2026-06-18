@@ -2,7 +2,7 @@
 
 AxiomPHP is a production-oriented desktop application foundation for a modern local PHP development control center. The long-term goal is to provide a safer, cleaner replacement for XAMPP-style workflows while keeping services, projects, credentials, and operating-system actions behind explicit boundaries.
 
-Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, managed database provisioning, security controls, backup/restore orchestration, and project Docker orchestration are available behind Rust application use cases and infrastructure ports.
+Current scope: production foundation plus safe configuration boundaries. Project PHP binary selection, project process controls, managed database provisioning, security controls, backup/restore orchestration, project Docker orchestration, and the Control Center usability layer are available behind Rust application use cases and infrastructure ports.
 
 ## Problem Statement
 
@@ -23,7 +23,7 @@ The project follows Clean Architecture on the Rust side and feature-based archit
 - `src/app` bootstraps the React app, providers, routes, and global styles.
 - `src/core` contains global API clients, configuration, design tokens, theme setup, frontend validation, and accessibility helpers.
 - `src/shared` contains reusable presentation components, hooks, utility functions, and common types.
-- `src/features` contains isolated feature modules for dashboard, projects, services, runtimes, databases, logs, and settings.
+- `src/features` contains isolated feature modules for the Control Center, setup wizard, projects, services, runtimes, databases, unified logs, security, and settings.
 - `src-tauri/src/domain` contains pure domain models.
 - `src-tauri/src/application` contains use-case boundaries.
 - `src-tauri/src/ports` contains traits for external systems.
@@ -58,6 +58,16 @@ Future implementation must keep Rust as the security boundary between UI intent 
 
 The backend is structured for macOS and Windows first, with `platform/common` keeping shared abstractions separate from OS-specific adapters. Future Linux support can be added without changing the domain or application layers.
 
+## Control Center Workflow
+
+The default screen is the AxiomPHP Control Center. It is designed as the daily-use surface for XAMPP-style workflows without exposing implementation internals first.
+
+- Select a project and review PHP, MySQL, PostgreSQL, Docker, reverse proxy, ports, logs, and setup readiness at a glance.
+- Use quick actions for Start, Stop, Restart, Open Browser, Open Folder, Open Logs, and Open phpMyAdmin only when backend prerequisites say the action is safe.
+- Use Setup for guided diagnostics across system checks, PHP selection, database readiness, local domain status, permissions, and summary.
+- Use Logs for a unified sanitized log reader. Sources without a stable backend reader report a clear unavailable state instead of showing fabricated log lines.
+- Advanced Docker trust, KMS, scheduler, registry, and permission details stay in focused advanced screens or details panels.
+
 ## Future Roadmap
 
 - Project-based PHP environment configuration
@@ -65,7 +75,7 @@ The backend is structured for macOS and Windows first, with `platform/common` ke
 - Optional cosign signature verification for Docker images
 - Port conflict detection
 - Environment profile management
-- Logs viewer and service health status
+- Expanded service-specific log readers for MySQL, PostgreSQL, reverse proxy, and application logs
 - Permission and audit log workflows
 - Signed release promotion dashboards and installer distribution policy
 

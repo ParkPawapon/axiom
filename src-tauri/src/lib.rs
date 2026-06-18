@@ -24,6 +24,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::project_commands::list_projects,
@@ -43,6 +44,8 @@ pub fn run() {
             commands::project_commands::stop_project_php_processes,
             commands::project_commands::restart_project_php_process,
             commands::project_commands::restart_project_php_processes,
+            commands::control_center_commands::get_control_center_summary,
+            commands::control_center_commands::get_setup_diagnostics,
             commands::database_commands::list_project_database_profiles,
             commands::database_commands::provision_project_database,
             commands::database_commands::configure_mysql,

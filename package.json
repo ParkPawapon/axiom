@@ -27,6 +27,7 @@
     "@mui/material-pigment-css": "9.0.1",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-opener": "^2.5.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.23.24",
     "react": "^19.1.1",

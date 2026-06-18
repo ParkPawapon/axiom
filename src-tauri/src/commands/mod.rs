@@ -1,3 +1,4 @@
+pub mod control_center_commands;
 pub mod database_commands;
 pub mod docker_commands;
 pub mod log_commands;
