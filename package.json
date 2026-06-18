@@ -24,7 +24,7 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/material": "^9.0.1",
-    "@mui/material-pigment-css": "9.0.1",
+    "@mui/material-pigment-css": "9.1.1",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
@@ -52,7 +52,7 @@
     "prettier": "^3.6.2",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "8.59.4",
+    "typescript-eslint": "8.61.1",
     "vite": "^8.0.13"
   }
 }
