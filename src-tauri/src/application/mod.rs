@@ -1,3 +1,4 @@
+pub mod control_center;
 pub mod databases;
 pub mod docker;
 pub mod logs;
