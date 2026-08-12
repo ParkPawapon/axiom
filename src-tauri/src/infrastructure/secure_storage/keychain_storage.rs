@@ -1,7 +1,7 @@
 use crate::ports::secure_storage::SecureStorage;
 use crate::shared::error::app_error::AppError;
 use crate::shared::result::app_result::AppResult;
-use keyring_core::{Entry, Error as KeyringError};
+use keyring::{Entry, Error as KeyringError};
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 pub struct KeychainStorage;
@@ -49,10 +49,6 @@ impl SecureStorage for KeychainStorage {
 }
 
 fn keyring_entry(namespace: &str, key: &str) -> AppResult<Entry> {
-    keyring::use_native_store(false).map_err(|error| {
-        AppError::Infrastructure(format!("secure storage native store setup failed: {error}"))
-    })?;
-
     Entry::new(&format!("AxiomPHP.{namespace}"), key)
         .map_err(|error| AppError::Infrastructure(format!("secure storage entry failed: {error}")))
 }

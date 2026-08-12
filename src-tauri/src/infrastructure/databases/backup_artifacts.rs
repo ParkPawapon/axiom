@@ -3,8 +3,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration as StdDuration;
 
-use aes_gcm::aead::rand_core::RngCore;
-use aes_gcm::aead::{Aead, OsRng};
+use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit as AesKeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -453,13 +452,25 @@ fn decrypt_backup(secure_storage: &dyn SecureStorage, path: &Path) -> AppResult<
     decrypt_bytes(secure_storage, &payload)
 }
 
+fn fill_random(bytes: &mut [u8], purpose: &str) -> AppResult<()> {
+    getrandom::fill(bytes).map_err(|error| {
+        AppError::Infrastructure(format!("failed to generate random {purpose}: {error}"))
+    })
+}
+
+fn nonce_from_slice(bytes: &[u8]) -> AppResult<&Nonce> {
+    bytes
+        .try_into()
+        .map_err(|_| AppError::Validation("AES-GCM nonce has an invalid length".to_string()))
+}
+
 fn encrypt_bytes(
     secure_storage: &dyn SecureStorage,
     plaintext: &[u8],
 ) -> AppResult<(Vec<u8>, Option<DatabaseBackupKmsEnvelope>)> {
     if let Some(config) = external_kms_config()? {
         let mut data_key = [0_u8; AES_256_KEY_BYTES];
-        OsRng.fill_bytes(&mut data_key);
+        fill_random(&mut data_key, "backup data key")?;
         let encrypted_data_key = encrypt_data_key_with_kms(&config, &data_key)?;
         let (payload, envelope) =
             encrypt_kms_envelope_payload(plaintext, data_key, encrypted_data_key)?;
@@ -472,9 +483,9 @@ fn encrypt_bytes(
         AppError::Infrastructure(format!("failed to initialize backup cipher: {error}"))
     })?;
     let mut nonce = [0_u8; AES_GCM_NONCE_BYTES];
-    OsRng.fill_bytes(&mut nonce);
+    fill_random(&mut nonce, "backup nonce")?;
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .encrypt(nonce_from_slice(&nonce)?, plaintext)
         .map_err(|error| AppError::Infrastructure(format!("backup encryption failed: {error}")))?;
     let mut payload = Vec::with_capacity(ENCRYPTION_MAGIC.len() + nonce.len() + ciphertext.len());
 
@@ -507,7 +518,7 @@ fn decrypt_bytes(secure_storage: &dyn SecureStorage, payload: &[u8]) -> AppResul
 
     cipher
         .decrypt(
-            Nonce::from_slice(&payload[nonce_start..ciphertext_start]),
+            nonce_from_slice(&payload[nonce_start..ciphertext_start])?,
             &payload[ciphertext_start..],
         )
         .map_err(|error| AppError::PermissionDenied(format!("backup decryption failed: {error}")))
@@ -522,9 +533,9 @@ fn encrypt_kms_envelope_payload(
         AppError::Infrastructure(format!("failed to initialize KMS backup cipher: {error}"))
     })?;
     let mut nonce = [0_u8; AES_GCM_NONCE_BYTES];
-    OsRng.fill_bytes(&mut nonce);
+    fill_random(&mut nonce, "KMS backup nonce")?;
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .encrypt(nonce_from_slice(&nonce)?, plaintext)
         .map_err(|error| {
             AppError::Infrastructure(format!("KMS envelope backup encryption failed: {error}"))
         })?;
@@ -611,7 +622,7 @@ fn decrypt_kms_envelope_payload(payload: &[u8]) -> AppResult<Vec<u8>> {
 
     cipher
         .decrypt(
-            Nonce::from_slice(&payload[header_end..nonce_end]),
+            nonce_from_slice(&payload[header_end..nonce_end])?,
             &payload[nonce_end..],
         )
         .map_err(|error| {
@@ -636,7 +647,7 @@ fn backup_key(secure_storage: &dyn SecureStorage) -> AppResult<[u8; AES_256_KEY_
     }
 
     let mut key = [0_u8; AES_256_KEY_BYTES];
-    OsRng.fill_bytes(&mut key);
+    fill_random(&mut key, "backup encryption key")?;
     secure_storage.store_secret(
         BACKUP_SECRET_NAMESPACE,
         BACKUP_ENCRYPTION_KEY,
@@ -656,8 +667,8 @@ fn encrypted_recovery_key_for_export(
     let backup_key = backup_key(secure_storage)?;
     let mut salt = [0_u8; RECOVERY_KEY_SALT_BYTES];
     let mut nonce = [0_u8; AES_GCM_NONCE_BYTES];
-    OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut nonce);
+    fill_random(&mut salt, "recovery key salt")?;
+    fill_random(&mut nonce, "recovery key nonce")?;
     let derived_key = derive_recovery_key(&passphrase, &salt, RECOVERY_KEY_KDF_ITERATIONS);
     let cipher = Aes256Gcm::new_from_slice(&derived_key).map_err(|error| {
         AppError::Infrastructure(format!(
@@ -665,7 +676,7 @@ fn encrypted_recovery_key_for_export(
         ))
     })?;
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), backup_key.as_slice())
+        .encrypt(nonce_from_slice(&nonce)?, backup_key.as_slice())
         .map_err(|error| {
             AppError::Infrastructure(format!(
                 "portable backup recovery key encryption failed: {error}"
@@ -732,7 +743,7 @@ fn import_encrypted_recovery_key(
         ))
     })?;
     let plaintext = cipher
-        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_slice())
+        .decrypt(nonce_from_slice(&nonce)?, ciphertext.as_slice())
         .map_err(|error| {
             AppError::PermissionDenied(format!("backup recovery key decryption failed: {error}"))
         })?;
@@ -783,7 +794,7 @@ fn signing_key(secure_storage: &dyn SecureStorage) -> AppResult<([u8; AES_256_KE
     }
 
     let mut key = [0_u8; AES_256_KEY_BYTES];
-    OsRng.fill_bytes(&mut key);
+    fill_random(&mut key, "backup signing key")?;
     secure_storage.store_secret(
         BACKUP_SECRET_NAMESPACE,
         BACKUP_SIGNING_KEY,
