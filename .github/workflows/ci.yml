@@ -11,30 +11,19 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    name: ${{ matrix.os }} quality
-    runs-on: ${{ matrix.os }}
+  frontend-checks:
+    name: Frontend checks
+    runs-on: windows-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - macos-14
-          - windows-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.23
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+          bun-version: 1.3.14
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -47,6 +36,28 @@ jobs:
 
       - name: Build frontend
         run: bun run build
+
+  rust-checks:
+    name: Rust checks (${{ matrix.check_name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            check_name: macos-latest
+          - os: windows-latest
+            check_name: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
@@ -75,12 +86,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.23
+          bun-version: 1.3.14
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile

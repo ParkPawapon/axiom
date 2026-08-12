@@ -4,18 +4,24 @@ use std::fs;
 
 use axiomphp_lib::domain::database::database_config::{
     DatabaseBackupCompression, DatabaseBackupEncryption, DatabaseBackupOptions,
+};
+#[cfg(unix)]
+use axiomphp_lib::domain::database::database_config::{
     DatabaseBackupRemoteDestination, DatabaseBackupRemoteDestinationProvider, DatabaseBackupResult,
 };
 use axiomphp_lib::domain::database::database_type::DatabaseType;
+#[cfg(unix)]
 use axiomphp_lib::domain::project::project_id::ProjectId;
 use axiomphp_lib::infrastructure::databases::backup_artifacts::{
     enroll_backup_artifact_trust, finalize_backup_artifact, prepare_restore_artifact,
 };
+#[cfg(unix)]
 use axiomphp_lib::infrastructure::databases::remote_backup_destination::copy_backup_to_remote_destination;
+#[cfg(unix)]
 use chrono::Utc;
-use support::{
-    database_profile, env_lock, EnvVarGuard, MemorySecureStorage, PathGuard, TestEnvironment,
-};
+#[cfg(unix)]
+use support::PathGuard;
+use support::{database_profile, env_lock, EnvVarGuard, MemorySecureStorage, TestEnvironment};
 
 #[test]
 fn managed_backup_artifact_round_trips_with_cross_machine_trust() {
