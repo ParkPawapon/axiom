@@ -1,9 +1,15 @@
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::Utc;
-use directories::{BaseDirs, ProjectDirs};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use directories::BaseDirs;
+#[cfg(target_os = "macos")]
+use directories::ProjectDirs;
 
 use crate::domain::database::database_config::{
     DatabaseBackupSchedulerInstallResult, DatabaseBackupSchedulerStatus,
@@ -17,6 +23,7 @@ use crate::shared::result::app_result::AppResult;
 
 const SCHEDULER_LABEL: &str = "dev.axiomphp.database-backups";
 const CLI_ARG: &str = "--run-due-database-backups";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const SCHEDULE_INTERVAL_SECONDS: u32 = 300;
 
 #[derive(Debug, Clone)]
@@ -581,6 +588,7 @@ fn platform_name() -> &'static str {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn escape_xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
