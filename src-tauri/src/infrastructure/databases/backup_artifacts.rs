@@ -3,8 +3,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration as StdDuration;
 
-use aes_gcm::aead::Aead;
-use aes_gcm::{Aes256Gcm, KeyInit as AesKeyInit, Nonce};
+use aes_gcm::aead::{Aead, Nonce as AeadNonce};
+use aes_gcm::{Aes256Gcm, KeyInit as AesKeyInit};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chrono::{Duration, Utc};
@@ -458,7 +458,7 @@ fn fill_random(bytes: &mut [u8], purpose: &str) -> AppResult<()> {
     })
 }
 
-fn nonce_from_slice(bytes: &[u8]) -> AppResult<&Nonce> {
+fn nonce_from_slice(bytes: &[u8]) -> AppResult<&AeadNonce<Aes256Gcm>> {
     bytes
         .try_into()
         .map_err(|_| AppError::Validation("AES-GCM nonce has an invalid length".to_string()))
